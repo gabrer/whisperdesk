@@ -12,9 +12,9 @@ from utils import diarization_root
 
 
 def ensure_ecapa_model(progress_callback=None) -> bool:
-    """Ensure the ECAPA ONNX model exists locally; download if missing.
+    """Ensure the speaker embedding ONNX model exists locally; download if missing.
 
-    Uses huggingface_hub for robust downloads, falls back to urllib if needed.
+    Uses WeSpeaker ResNet34 from hbredin/wespeaker-voxceleb-resnet34-LM.
     Returns True if available (already present or downloaded), False on failure.
     progress_callback: optional callable (msg: str, pct: int)
     """
@@ -24,42 +24,36 @@ def ensure_ecapa_model(progress_callback=None) -> bool:
     if os.path.isfile(target):
         return True
 
-    # Try huggingface_hub first: download any .onnx from the repo snapshot and select one
+    # Helper: basic validation to catch HTML/partial downloads
+    def _looks_like_onnx(path: str) -> bool:
+        try:
+            sz = os.path.getsize(path)
+            if sz < 100_000:  # very small -> likely HTML error page
+                return False
+            with open(path, 'rb') as f:
+                head = f.read(64)
+            # crude check for HTML
+            if head.strip().lower().startswith(b'<!doctype') or head.strip().lower().startswith(b'<html'):
+                return False
+            return True
+        except Exception:
+            return False
+
+    # Try huggingface_hub first for clean download
     try:
         if progress_callback:
             progress_callback('Downloading diarization model…', 10)
-        from huggingface_hub import snapshot_download
-        snap_dir = snapshot_download(
-            repo_id='speechbrain/spkrec-ecapa-voxceleb',
+        from huggingface_hub import hf_hub_download
+        dl_path = hf_hub_download(
+            repo_id='hbredin/wespeaker-voxceleb-resnet34-LM',
+            filename='speaker-embedding.onnx',
             revision='main',
-            allow_patterns=['*.onnx', '**/*.onnx'],
-            local_dir=root,
-            local_dir_use_symlinks=False,
         )
-        # Find any .onnx file in the snapshot dir
-        candidates = []
-        for dirpath, _, filenames in os.walk(snap_dir):
-            for fn in filenames:
-                if fn.lower().endswith('.onnx'):
-                    candidates.append(os.path.join(dirpath, fn))
-        if not candidates:
-            raise FileNotFoundError('No .onnx file found in speechbrain/spkrec-ecapa-voxceleb')
-        # Prefer a file containing 'embedding' in the name, else pick the first
-        chosen = None
-        for c in candidates:
-            name = os.path.basename(c).lower()
-            if 'embedding' in name or 'ecapa' in name:
-                chosen = c
-                break
-        if not chosen:
-            chosen = candidates[0]
-        # Copy to expected target name
-        try:
-            import shutil as _shutil
-            _shutil.copyfile(chosen, target)
-        except Exception as _e:
-            logging.warning('Failed to copy downloaded model (%s); using snapshot file directly.', _e)
-            target = chosen
+        # Copy to our expected location
+        import shutil as _shutil
+        _shutil.copyfile(dl_path, target)
+        if not _looks_like_onnx(target):
+            raise RuntimeError('Downloaded file does not look like a valid ONNX model')
         if progress_callback:
             progress_callback('Diarization model ready.', 100)
         return True
@@ -73,7 +67,7 @@ def ensure_ecapa_model(progress_callback=None) -> bool:
         import tempfile
         if progress_callback:
             progress_callback('Downloading diarization model…', 20)
-        url = 'https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/embedding_model.onnx?download=true'
+        url = 'https://huggingface.co/hbredin/wespeaker-voxceleb-resnet34-LM/resolve/main/speaker-embedding.onnx?download=true'
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as resp:
             total = resp.length or 0
@@ -91,11 +85,13 @@ def ensure_ecapa_model(progress_callback=None) -> bool:
                         progress_callback('Downloading diarization model…', pct)
                 tmp_path = tmp.name
         shutil.move(tmp_path, target)
+        if not _looks_like_onnx(target):
+            raise RuntimeError('HTTP-downloaded file is not a valid ONNX (possibly an HTML page).')
         if progress_callback:
             progress_callback('Diarization model ready.', 100)
         return True
     except Exception as e:
-        logging.warning('Failed to download ECAPA ONNX model via HTTP: %s', e)
+        logging.warning('Failed to download speaker embedding model via HTTP: %s', e)
         try:
             if 'tmp_path' in locals() and os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -195,26 +191,61 @@ class ECAPAEmbedder:
         model_path = os.path.join(diarization_root(), 'ecapa-voxceleb.onnx')
         if not os.path.isfile(model_path):
             raise FileNotFoundError(
-                f"Missing ECAPA ONNX model at {model_path}\n"
-                "Download it from: https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb/resolve/main/embedding_model.onnx?download=true\n"
+                f"Missing speaker embedding ONNX model at {model_path}\n"
+                "Download it from: https://huggingface.co/hbredin/wespeaker-voxceleb-resnet34-LM/resolve/main/speaker-embedding.onnx\n"
                 "Save as: diarization_models/ecapa-voxceleb.onnx"
             )
         self.session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
 
     def _mfcc(self, audio, _sr: int):
-        # Minimal MFCC/log-mel features; replace with your preproc that matches ONNX export.
-        # For skeleton, we use a simple log-mel filterbank with librosa-like steps, but without librosa.
-        # This is a placeholder; in production align with the ECAPA pipeline used for export.
+        """Compute 80-dim log-Mel filterbank features (fbank) expected by WeSpeaker models.
+        Window: 25 ms (400 samples at 16k), hop: 10 ms (160 samples), n_fft=512, n_mels=80.
+        """
         import numpy as np
         import numpy.fft as fft
-        win = 400
-        hop = 160
+
+        n_fft = 512
+        n_mels = 80
+        win = int(0.025 * _sr)  # 25 ms
+        hop = int(0.010 * _sr)  # 10 ms
+        if win < 1:
+            win = 400
+        if hop < 1:
+            hop = 160
+
+        # Precompute Mel filterbank
+        def hz_to_mel(hz):
+            return 2595.0 * np.log10(1.0 + hz / 700.0)
+
+        def mel_to_hz(mel):
+            return 700.0 * (10.0**(mel / 2595.0) - 1.0)
+
+        fmin = 0.0
+        fmax = _sr / 2.0
+        mels = np.linspace(hz_to_mel(fmin), hz_to_mel(fmax), num=n_mels + 2)
+        hz = mel_to_hz(mels)
+        bins = np.floor((n_fft + 1) * hz / _sr).astype(int)
+        fb = np.zeros((n_mels, n_fft // 2 + 1), dtype=np.float32)
+        for m in range(1, n_mels + 1):
+            f_m0, f_m1, f_m2 = bins[m - 1], bins[m], bins[m + 1]
+            f_m0 = max(f_m0, 0)
+            f_m2 = min(f_m2, n_fft // 2)
+            if f_m1 > f_m0:
+                fb[m - 1, f_m0:f_m1] = (np.arange(f_m0, f_m1) - f_m0) / max(1, (f_m1 - f_m0))
+            if f_m2 > f_m1:
+                fb[m - 1, f_m1:f_m2] = (f_m2 - np.arange(f_m1, f_m2)) / max(1, (f_m2 - f_m1))
+
+        # Framing and STFT power spectrum
         frames = []
-        for i in range(0, len(audio)-win, hop):
-            frame = audio[i:i+win] * np.hanning(win)
-            spec = np.abs(fft.rfft(frame, n=512))
-            frames.append(np.log1p(spec))
-        feats = np.stack(frames, axis=0) if frames else np.zeros((1, 257), dtype=np.float32)
+        hann = np.hanning(win).astype(np.float32)
+        for i in range(0, max(0, len(audio) - win + 1), hop):
+            frame = audio[i:i + win].astype(np.float32) * hann
+            spec = np.abs(fft.rfft(frame, n=n_fft))**2  # power spectrum
+            mel = fb @ spec[: (n_fft // 2 + 1)]
+            mel = np.maximum(mel, 1e-10)
+            frames.append(np.log(mel))
+
+        feats = np.stack(frames, axis=0) if frames else np.zeros((1, n_mels), dtype=np.float32)
         return feats.astype(np.float32)
 
     def embed_segment(self, audio, sr: int, start: float, end: float):
@@ -223,10 +254,25 @@ class ECAPAEmbedder:
         e = min(len(audio), int(end * sr))
         frag = audio[s:e].astype(np.float32) / 32768.0
         feats = self._mfcc(frag, sr)
-        inp = feats[None, ...]  # (1, T, F)
+        feats = np.nan_to_num(feats, copy=False, nan=0.0, posinf=1e5, neginf=-1e5)
+        inp = feats[None, ...]  # (1, T, 80)
         outs = self.session.run(None, {self.session.get_inputs()[0].name: inp})
-        emb = outs[0].mean(axis=1).squeeze()
-        return emb / (np.linalg.norm(emb) + 1e-10)
+        arr = outs[0]
+        # Robustly collapse to a 1-D embedding vector
+        arr = np.squeeze(arr)
+        if arr.ndim == 1:
+            emb_vec = arr
+        elif arr.ndim == 2:
+            # assume (T, D) or (D, T); pick time mean to get (D,)
+            # choose axis with larger size as time dimension
+            time_axis = 0 if arr.shape[0] >= arr.shape[1] else 1
+            emb_vec = arr.mean(axis=time_axis)
+        else:
+            # flatten time dimensions, keep last as feature dim
+            emb_vec = arr.reshape(-1, arr.shape[-1]).mean(axis=0)
+        emb_vec = np.nan_to_num(emb_vec, nan=0.0, posinf=0.0, neginf=0.0)
+        norm = np.linalg.norm(emb_vec) + 1e-10
+        return emb_vec / norm
 
 
 def diarize(wav_path: str, max_speakers: int = 3) -> List[Tuple[float, float, int]]:
