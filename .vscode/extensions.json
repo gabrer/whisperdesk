@@ -1,0 +1,9 @@
+{
+    "recommendations": [
+        "EditorConfig.EditorConfig",
+        "streetsidesoftware.code-spell-checker",
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint"
+    ],
+    "unwantedRecommendations": []
+}

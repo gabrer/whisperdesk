@@ -1,0 +1,5 @@
+{
+    "sample_rate": 16000,
+    "frame_ms": 30,
+    "aggressiveness": 2
+}

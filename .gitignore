@@ -1,0 +1,93 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# General
+.env
+.env.*
+*.env
+*.log
+*.tmp
+tmp/
+temp/
+
+# Node
+node_modules/
+dist/
+build/
+.npm/
+.eslintcache
+.parcel-cache/
+.next/
+.nuxt/
+.turbo/
+.vite/
+yarn-error.log*
+npm-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+.mypy_cache/
+.pytest_cache/
+.tox/
+.coverage*
+coverage/
+htmlcov/
+.ipynb_checkpoints/
+
+# Editors/IDEs
+.idea/
+.history/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# Misc
+coverage-final.json
+*.coverage
+*.db
+*.sqlite
+*.sqlite3
+
+# App artifacts
+logs/
+
+# Large/bundled model folders (not tracked)
+models/*
+!models/.gitkeep
+!models/README.md
+
+diarization_models/*
+!diarization_models/.gitkeep
+!diarization_models/README.md
+!diarization_models/vad_config.json
+
+# Ignore ONNX model binaries explicitly
+diarization_models/*.onnx

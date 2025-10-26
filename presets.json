@@ -1,0 +1,17 @@
+{
+  "defaults": {
+    "model_preference": "small",
+    "language_hint": "en",
+    "word_timestamps": false,
+    "vad_sensitivity": "normal",
+    "diarization_max_speakers": 3,
+    "device_mode": "auto",
+    "output_formats": [
+      "txt",
+      "docx"
+    ],
+    "numbers_as_figures": true,
+    "filter_profanity": false,
+    "log_level": "INFO"
+  }
+}

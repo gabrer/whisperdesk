@@ -1,0 +1,9 @@
+{
+    "editor.formatOnSave": true,
+    "files.eol": "\n",
+    "files.exclude": {
+        "**/.DS_Store": true
+    },
+    "cSpell.enabled": true,
+    "cSpell.language": "en,en-US"
+}
