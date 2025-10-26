@@ -13,7 +13,7 @@
     "numbers_as_figures": true,
     "filter_profanity": false,
     "log_level": "INFO",
-    "output_dir": "/Users/u1775268/Downloads",
+    "output_dir": "",
     "diarization_engine": "speechbrain",
     "favorite_models": [
       "whisper-medium-en-ct2"

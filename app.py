@@ -1,14 +1,14 @@
 import os
 import sys
 import logging
-from typing import List, Dict
+from typing import List
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QAction, QStandardItemModel, QStandardItem
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtGui import QStandardItemModel, QStandardItem
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog,
     QHBoxLayout, QListWidget, QListWidgetItem, QComboBox, QCheckBox, QTabWidget,
-    QGroupBox, QFormLayout, QLineEdit, QAbstractItemView, QProgressBar
+    QFormLayout, QLineEdit, QAbstractItemView, QProgressBar
 )
 
 from utils import setup_logging, models_root, app_root
@@ -121,7 +121,7 @@ class MainWindow(QWidget):
         self.resize(800, 520)
 
         self.cfg = Settings()
-        log_path = setup_logging(self.cfg.log_level)
+        setup_logging(self.cfg.log_level)
 
         v = QVBoxLayout(self)
 
@@ -244,8 +244,12 @@ class MainWindow(QWidget):
         model = QStandardItemModel()
         def add_header(text: str):
             item = QStandardItem(text)
-            # Disable selection for headers
-            item.setFlags(item.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
+            # Disable selection for headers (avoid Qt enum usage to keep it simple)
+            try:
+                item.setEnabled(False)
+                item.setSelectable(False)
+            except Exception:
+                pass
             model.appendRow(item)
 
         if favs:
