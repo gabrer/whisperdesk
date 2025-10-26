@@ -11,7 +11,9 @@ _DEFAULTS = {
     "output_formats": ["txt", "docx"],
     "numbers_as_figures": True,
     "filter_profanity": False,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    # Empty string means "next to input file"; otherwise an absolute/relative folder path
+    "output_dir": ""
 }
 
 
@@ -30,6 +32,7 @@ class Settings:
         self.numbers_as_figures = defaults.get("numbers_as_figures", _DEFAULTS["numbers_as_figures"])
         self.filter_profanity = defaults.get("filter_profanity", _DEFAULTS["filter_profanity"])
         self.log_level = defaults.get("log_level", _DEFAULTS["log_level"])
+        self.output_dir = defaults.get("output_dir", _DEFAULTS["output_dir"]) or ""
 
     def to_dict(self):
         return {
@@ -43,7 +46,8 @@ class Settings:
                 "output_formats": self.output_formats,
                 "numbers_as_figures": self.numbers_as_figures,
                 "filter_profanity": self.filter_profanity,
-                "log_level": self.log_level
+                "log_level": self.log_level,
+                "output_dir": self.output_dir
             }
         }
 

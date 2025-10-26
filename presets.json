@@ -2,9 +2,9 @@
   "defaults": {
     "model_preference": "small",
     "language_hint": "en",
-    "word_timestamps": false,
+    "word_timestamps": true,
     "vad_sensitivity": "normal",
-    "diarization_max_speakers": 3,
+    "diarization_max_speakers": 2,
     "device_mode": "auto",
     "output_formats": [
       "txt",
@@ -12,6 +12,7 @@
     ],
     "numbers_as_figures": true,
     "filter_profanity": false,
-    "log_level": "INFO"
+    "log_level": "INFO",
+    "output_dir": ""
   }
 }
