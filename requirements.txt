@@ -12,6 +12,11 @@ onnxruntime>=1.16.0
 webrtcvad>=2.0.10
 scikit-learn>=1.4.0
 huggingface_hub>=0.22.0
+# SpeechBrain for high-quality speaker embeddings
+speechbrain>=1.0.0
+# PyTorch - pinned for SpeechBrain 1.0.3 compatibility (needs torchaudio.list_audio_backends)
+torch>=2.0.0,<2.1.0
+torchaudio>=2.0.0,<2.1.0
 
 # Audio/processing
 numpy>=1.25,<2.0

@@ -4,11 +4,11 @@ import logging
 from typing import List, Dict
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QStandardItemModel, QStandardItem
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog,
     QHBoxLayout, QListWidget, QListWidgetItem, QComboBox, QCheckBox, QTabWidget,
-    QGroupBox, QFormLayout, QMessageBox, QLineEdit, QAbstractItemView, QProgressBar
+    QGroupBox, QFormLayout, QLineEdit, QAbstractItemView, QProgressBar
 )
 
 from utils import setup_logging, models_root, app_root
@@ -49,8 +49,8 @@ class Worker(QThread):
                 progress_callback=on_progress
             )
             on_progress("Model ready.", 100)
-            # Pre-fetch diarization model if user requested multi-speaker diarization
-            if self.cfg.diarization_max_speakers > 1:
+            # Pre-fetch diarization model if user requested multi-speaker diarization and engine is enabled
+            if self.cfg.diarization_max_speakers > 1 and self.cfg.diarization_engine != 'none':
                 ensure_ecapa_model(progress_callback=on_progress)
         except Exception as e:
             import traceback
@@ -65,12 +65,24 @@ class Worker(QThread):
             try:
                 on_progress(f"Transcribing {os.path.basename(wav)}...", 0)
                 asr = tr.transcribe(wav)
-                diar = diarize(wav, max_speakers=self.cfg.diarization_max_speakers)
+                # If diarization is disabled or single-speaker is selected, assign all to Speaker 1
+                if self.cfg.diarization_engine == 'none' or self.cfg.diarization_max_speakers <= 1:
+                    duration = float(asr.get("duration", 0.0))
+                    diar = [(0.0, duration, 0)]
+                else:
+                    diar = diarize(wav, max_speakers=self.cfg.diarization_max_speakers, engine=self.cfg.diarization_engine)
                 segs = assign_speakers_to_asr(asr["segments"], diar)
 
                 # default speaker map
                 spk_ids = sorted(set([s.get("speaker", 0) for s in segs]))
                 speaker_map = {i: f"Speaker {i+1}" for i in spk_ids}
+                
+                # Determine if we should include speaker labels
+                include_speakers = (
+                    self.cfg.diarization_engine != 'none' 
+                    and self.cfg.diarization_max_speakers > 1 
+                    and len(spk_ids) > 1
+                )
 
                 # Determine output base path (respect configured output directory if set)
                 out_dir = (self.cfg.output_dir or "").strip()
@@ -78,16 +90,23 @@ class Worker(QThread):
                     if not os.path.isabs(out_dir):
                         out_dir = os.path.abspath(out_dir)
                     os.makedirs(out_dir, exist_ok=True)
-                    base_name = os.path.splitext(os.path.basename(wav))[0]
-                    base = os.path.join(out_dir, base_name)
                 else:
-                    base = os.path.splitext(wav)[0]
-                out_txt = base + ".txt"
-                out_docx = base + ".docx"
+                    # Use same directory as input file
+                    out_dir = os.path.dirname(os.path.abspath(wav))
+                
+                # Build filename: YYYYMMDD_HHMM_originalName_modelName.ext
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+                original_name = os.path.splitext(os.path.basename(wav))[0]
+                model_short = self.model_name.replace("whisper-", "").replace("-ct2", "")
+                base_name = f"{timestamp}_{original_name}_{model_short}"
+                
+                out_txt = os.path.join(out_dir, base_name + ".txt")
+                out_docx = os.path.join(out_dir, base_name + ".docx")
                 if "txt" in self.cfg.output_formats:
-                    export_txt(out_txt, segs, speaker_map)
+                    export_txt(out_txt, segs, speaker_map, include_speakers=include_speakers)
                 if "docx" in self.cfg.output_formats:
-                    export_docx(out_docx, segs, speaker_map)
+                    export_docx(out_docx, segs, speaker_map, include_speakers=include_speakers)
 
                 self.file_done.emit(wav)
             except Exception as e:
@@ -139,12 +158,22 @@ class MainWindow(QWidget):
 
         controls.addWidget(QLabel("Model:"))
         self.model_combo = QComboBox()
-        self.model_combo.addItems(self._available_models())
+        # Build grouped model list with favorites
+        self._rebuild_model_combo()
         # choose preference if available
         pref = f"whisper-{self.cfg.model_preference}-ct2"
-        if pref in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
+        texts = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
+        if pref in texts:
             self.model_combo.setCurrentText(pref)
+        # Favorite toggle button
+        self.btn_fav = QPushButton("☆")
+        self.btn_fav.setToolTip("Toggle favorite for selected model")
+        self.model_combo.currentTextChanged.connect(self._on_model_changed)
+        self.btn_fav.clicked.connect(self._toggle_favorite)
         controls.addWidget(self.model_combo)
+        controls.addWidget(self.btn_fav)
+        # Initialize star state
+        self._on_model_changed(self.model_combo.currentText())
 
         self.chk_txt = QCheckBox("TXT")
         self.chk_txt.setChecked("txt" in self.cfg.output_formats)
@@ -184,7 +213,15 @@ class MainWindow(QWidget):
             "whisper-base-ct2",
             "whisper-small-ct2",
             "whisper-medium-ct2",
+            # English-only variants
+            "whisper-small-en-ct2",
+            "whisper-medium-en-ct2",
+            # Large variants
+            "whisper-large-v2-ct2",
             "whisper-large-v3-ct2",
+            "whisper-large-v3-turbo-ct2",
+            # Distilled
+            "whisper-distil-large-v3-ct2",
         ]
         local = []
         if os.path.isdir(root):
@@ -197,6 +234,50 @@ class MainWindow(QWidget):
                 seen.add(name)
                 result.append(name)
         return result
+
+    def _rebuild_model_combo(self):
+        # Build a grouped list with favorites and all models
+        all_models = self._available_models()
+        favs = [m for m in self.cfg.favorite_models if m in all_models]
+        others = [m for m in all_models if m not in favs]
+
+        model = QStandardItemModel()
+        def add_header(text: str):
+            item = QStandardItem(text)
+            # Disable selection for headers
+            item.setFlags(item.flags() & ~Qt.ItemIsEnabled & ~Qt.ItemIsSelectable)
+            model.appendRow(item)
+
+        if favs:
+            add_header("— Favorites —")
+            for m in favs:
+                model.appendRow(QStandardItem(m))
+            add_header("— All Models —")
+        for m in others:
+            model.appendRow(QStandardItem(m))
+
+        self.model_combo.setModel(model)
+
+    def _on_model_changed(self, text: str):
+        # Update star icon depending on favorite status
+        if not text or text.startswith("— "):
+            return
+        starred = text in (self.cfg.favorite_models or [])
+        self.btn_fav.setText("★" if starred else "☆")
+
+    def _toggle_favorite(self):
+        text = self.model_combo.currentText()
+        if not text or text.startswith("— "):
+            return
+        favs = set(self.cfg.favorite_models or [])
+        if text in favs:
+            favs.remove(text)
+        else:
+            favs.add(text)
+        self.cfg.favorite_models = sorted(favs)
+        self.cfg.save()
+        self._rebuild_model_combo()
+        self._on_model_changed(text)
 
     def _build_easy_tab(self):
         w = QWidget()
@@ -226,6 +307,12 @@ class MainWindow(QWidget):
         self.max_spk.addItems(["1", "2", "3"])
         self.max_spk.setCurrentText(str(self.cfg.diarization_max_speakers))
         f.addRow("Max speakers:", self.max_spk)
+        # Diarization engine
+        self.diar_engine = QComboBox()
+        self.diar_engine.addItems(["Disabled (Whisper only)", "SpeechBrain ECAPA (best)", "WeSpeaker ONNX (light)"])
+        eng_to_idx = {"none": 0, "speechbrain": 1, "wespeaker": 2}
+        self.diar_engine.setCurrentIndex(eng_to_idx.get(self.cfg.diarization_engine, 1))
+        f.addRow("Diarization engine:", self.diar_engine)
         # Device override
         self.device_combo = QComboBox()
         self.device_combo.addItems(["auto", "gpu", "cpu"])
@@ -253,13 +340,20 @@ class MainWindow(QWidget):
     def start_transcription(self):
         files = [self.file_list.item(i).text() for i in range(self.file_list.count())]
         if not files:
-            QMessageBox.information(self, "WhisperDesk", "Add WAV files first.")
+            self.progress_label.setText("⚠️ Please add WAV files first.")
             return
 
         # Persist current settings
         self.cfg.language_hint = self.lang_edit.text().strip() or "en"
         self.cfg.word_timestamps = self.chk_word_ts.isChecked()
         self.cfg.diarization_max_speakers = int(self.max_spk.currentText())
+        idx = self.diar_engine.currentIndex()
+        if idx == 0:
+            self.cfg.diarization_engine = 'none'
+        elif idx == 1:
+            self.cfg.diarization_engine = 'speechbrain'
+        else:
+            self.cfg.diarization_engine = 'wespeaker'
         self.cfg.device_mode = self.device_combo.currentText()
         self.cfg.output_dir = self.output_dir_edit.text().strip()
         fmts = []
@@ -271,16 +365,13 @@ class MainWindow(QWidget):
         self.cfg.save()
 
         model_name = self.model_combo.currentText()
-        if not model_name:
-            QMessageBox.warning(self, "WhisperDesk", "No model selected.")
+        if not model_name or model_name.startswith("— "):
+            self.progress_label.setText("⚠️ Please select a valid model.")
             return
         # Inform users when selection will trigger a download
         model_dir = os.path.join(models_root(), model_name)
         if not os.path.isdir(model_dir):
-            QMessageBox.information(
-                self,
-                "Model download",
-                "Selected model is not present locally. It will be downloaded automatically on first use.")
+            self.progress_label.setText(f"ℹ️ Model '{model_name}' will be downloaded automatically on first use.")
 
         self.btn_transcribe.setEnabled(False)
         self.btn_cancel.setEnabled(True)
@@ -306,17 +397,17 @@ class MainWindow(QWidget):
 
     def on_file_done(self, wav):
         logging.info("Done: %s", wav)
+        self.progress_label.setText(f"✅ Completed: {os.path.basename(wav)}")
 
     def on_file_error(self, wav, err):
         logging.error("Error on %s: %s", wav, err)
-        QMessageBox.critical(self, "WhisperDesk", f"Error on {os.path.basename(wav)}:\n{err}")
+        self.progress_label.setText(f"❌ Error on {os.path.basename(wav)}: {err}")
 
     def on_all_done(self):
         self.btn_transcribe.setEnabled(True)
         self.btn_cancel.setEnabled(False)
-        self.progress_label.setText("All done.")
+        self.progress_label.setText("✅ All transcriptions completed successfully!")
         self.progress_bar.setVisible(False)
-        QMessageBox.information(self, "WhisperDesk", "All done.")
 
 
 def main():

@@ -1,4 +1,8 @@
-"""Lightweight diarization: VAD -> embeddings (ECAPA-ONNX) -> k-means (K<=3) -> assign to segments.
+"""Lightweight diarization: VAD -> embeddings -> clustering -> assign to segments.
+
+Supports two engines:
+- 'speechbrain': High-quality ECAPA embeddings via SpeechBrain (requires torch)
+- 'wespeaker': Lightweight ONNX embeddings (fallback, no torch needed)
 
 This module defers heavy imports so the application can import even if optional
 dependencies are not installed. When diarization is disabled (max_speakers <= 1)
@@ -6,7 +10,7 @@ or dependencies are missing, it returns a single-speaker fallback.
 """
 import logging
 import os
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 from utils import diarization_root
 
@@ -253,6 +257,12 @@ class ECAPAEmbedder:
         s = max(0, int(start * sr))
         e = min(len(audio), int(end * sr))
         frag = audio[s:e].astype(np.float32) / 32768.0
+        
+        # Check for silent/empty segments
+        if len(frag) < 100 or np.abs(frag).max() < 1e-6:
+            # Return a small random embedding for silent segments
+            return np.random.randn(192).astype(np.float32) * 0.01
+        
         feats = self._mfcc(frag, sr)
         feats = np.nan_to_num(feats, copy=False, nan=0.0, posinf=1e5, neginf=-1e5)
         inp = feats[None, ...]  # (1, T, 80)
@@ -271,13 +281,25 @@ class ECAPAEmbedder:
             # flatten time dimensions, keep last as feature dim
             emb_vec = arr.reshape(-1, arr.shape[-1]).mean(axis=0)
         emb_vec = np.nan_to_num(emb_vec, nan=0.0, posinf=0.0, neginf=0.0)
-        norm = np.linalg.norm(emb_vec) + 1e-10
+        
+        # Check if embedding is zero vector
+        norm = np.linalg.norm(emb_vec)
+        if norm < 1e-8:
+            # Return small random embedding instead of zero
+            return np.random.randn(len(emb_vec)).astype(np.float32) * 0.01
+        
         return emb_vec / norm
 
 
-def diarize(wav_path: str, max_speakers: int = 3) -> List[Tuple[float, float, int]]:
-    """Returns list of (start, end, speaker_id)."""
-    logging.info("Diarizing: %s", wav_path)
+def diarize(wav_path: str, max_speakers: int = 3, engine: str = 'speechbrain') -> List[Tuple[float, float, int]]:
+    """Returns list of (start, end, speaker_id).
+    
+    Args:
+        wav_path: path to WAV file
+        max_speakers: maximum number of speakers (1-3)
+        engine: 'speechbrain' (high quality) or 'wespeaker' (lightweight ONNX fallback)
+    """
+    logging.info("Diarizing: %s (engine=%s)", wav_path, engine)
     audio, sr = load_wav_mono16(wav_path)
 
     # If diarization is disabled or single speaker requested, return a single segment.
@@ -287,12 +309,11 @@ def diarize(wav_path: str, max_speakers: int = 3) -> List[Tuple[float, float, in
     # Defer heavy deps; if missing, return single-speaker fallback with a warning.
     try:
         import numpy as np
-        from sklearn.cluster import KMeans
     except (ImportError, ModuleNotFoundError) as e:
-        logging.warning("Diarization dependencies missing (%s); returning single-speaker.", e)
+        logging.warning("NumPy missing (%s); returning single-speaker.", e)
         return [(0.0, len(audio)/sr if sr else 0.0, 0)]
 
-    # VAD
+    # VAD to find voiced segments
     try:
         vad = VADSegmenter(aggressiveness=2, sample_rate=sr, frame_ms=30)
         pcm = audio.tobytes()
@@ -304,48 +325,230 @@ def diarize(wav_path: str, max_speakers: int = 3) -> List[Tuple[float, float, in
     if not voiced:
         return [(0.0, len(audio)/sr, 0)]
 
-    # Embeddings
-    try:
-        emb = ECAPAEmbedder()
-        vecs = []
-        for (s, e) in voiced:
-            vecs.append(emb.embed_segment(audio, sr, s, e))
-        X = np.stack(vecs, axis=0)
-    except FileNotFoundError as e:
-        logging.warning("ECAPA model not found; returning single-speaker. %s", e)
-        return [(0.0, len(audio)/sr if sr else 0.0, 0)]
-    except Exception as e:
-        logging.warning("Embedding extraction failed (%s); returning single-speaker.", e)
-        return [(0.0, len(audio)/sr if sr else 0.0, 0)]
-
-    # Choose K<=max_speakers via silhouette (fallback K=1)
-    def best_k(X, kmax):
-        if X.shape[0] < 2:
-            return 1
-        from sklearn.metrics import silhouette_score
-        best_score, bestk = -1.0, 1
-        for k in range(1, min(kmax, X.shape[0]) + 1):
-            if k == 1:
-                score = -1.0
-            else:
-                km = KMeans(n_clusters=k, n_init=10, random_state=42).fit(X)
-                score = silhouette_score(X, km.labels_)
-            if score > best_score:
-                best_score, bestk = score, k
-        return bestk
-
-    K = best_k(X, max_speakers)
-    if K == 1:
-        labels = np.zeros((X.shape[0],), dtype=int)
+    # Try SpeechBrain engine first if requested
+    if engine == 'speechbrain':
+        try:
+            embeddings = _extract_embeddings_speechbrain(audio, sr, voiced)
+        except Exception as e:
+            logging.warning("SpeechBrain embedding failed (%s); falling back to WeSpeaker ONNX.", e)
+            embeddings = None
     else:
-        km = KMeans(n_clusters=K, n_init=10, random_state=42).fit(X)
-        labels = km.labels_
+        embeddings = None
+
+    # Fallback to WeSpeaker ONNX if SpeechBrain unavailable or failed
+    if embeddings is None:
+        try:
+            embeddings = _extract_embeddings_wespeaker(audio, sr, voiced)
+        except Exception as e:
+            logging.warning("WeSpeaker embedding failed (%s); returning single-speaker.", e)
+            return [(0.0, len(audio)/sr if sr else 0.0, 0)]
+
+    # Cluster embeddings
+    try:
+        labels = _cluster_embeddings(embeddings, max_speakers)
+    except Exception as e:
+        logging.warning("Clustering failed (%s); returning single-speaker.", e)
+        return [(0.0, len(audio)/sr if sr else 0.0, 0)]
 
     # Assign speakers to segments
     diarized = []
     for (seg, spk) in zip(voiced, labels):
         diarized.append((seg[0], seg[1], int(spk)))
+    
+    # Apply smoothing to reduce spurious speaker changes
+    diarized = _smooth_speaker_labels(diarized, min_duration=0.3, median_window=3)
+    
     return diarized
+
+
+def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[float, float]]):
+    """Extract speaker embeddings using SpeechBrain ECAPA-TDNN.
+    
+    Returns: np.ndarray of shape (n_segments, embedding_dim)
+    """
+    import numpy as np
+    import torch
+    
+    # Import SpeechBrain with error handling
+    try:
+        from speechbrain.inference.speaker import EncoderClassifier
+    except Exception as e:
+        raise ImportError(f"Failed to import SpeechBrain: {e}")
+    
+    # Load pretrained ECAPA model
+    classifier = EncoderClassifier.from_hparams(
+        source="speechbrain/spkrec-ecapa-voxceleb",
+        savedir="models/speechbrain_ecapa"
+    )
+    
+    embeddings = []
+    for (start, end) in voiced_segments:
+        s = max(0, int(start * sr))
+        e = min(len(audio), int(end * sr))
+        segment = audio[s:e].astype(np.float32) / 32768.0
+        
+        # Skip silent/empty segments
+        if len(segment) < 100 or np.abs(segment).max() < 1e-6:
+            # Use a small random embedding for silent segments
+            emb_np = np.random.randn(192).astype(np.float32) * 0.01
+        else:
+            # SpeechBrain expects torch tensor
+            waveform = torch.from_numpy(segment).unsqueeze(0)  # (1, samples)
+            
+            with torch.no_grad():
+                emb = classifier.encode_batch(waveform)
+                emb_np = emb.squeeze().cpu().numpy()
+        
+        embeddings.append(emb_np)
+    
+    return np.stack(embeddings, axis=0)
+
+
+def _extract_embeddings_wespeaker(audio, sr: int, voiced_segments: List[Tuple[float, float]]):
+    """Extract speaker embeddings using WeSpeaker ONNX model (fallback).
+    
+    Returns: np.ndarray of shape (n_segments, embedding_dim)
+    """
+    import numpy as np
+    
+    emb = ECAPAEmbedder()
+    vecs = []
+    for (s, e) in voiced_segments:
+        vecs.append(emb.embed_segment(audio, sr, s, e))
+    
+    return np.stack(vecs, axis=0)
+
+
+def _cluster_embeddings(embeddings, max_speakers: int):
+    """Cluster embeddings using Agglomerative Clustering with cosine affinity.
+    
+    Returns: np.ndarray of speaker labels for each segment
+    """
+    import numpy as np
+    from sklearn.cluster import AgglomerativeClustering
+    from sklearn.metrics import silhouette_score
+    
+    n_samples = embeddings.shape[0]
+    
+    if n_samples < 2:
+        return np.zeros((n_samples,), dtype=int)
+    
+    # Normalize embeddings for cosine distance
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+    # Check for zero vectors that would cause clustering to fail
+    zero_mask = norms.squeeze() < 1e-8
+    if zero_mask.all():
+        # All embeddings are zero - return single speaker
+        logging.warning("All embeddings are zero vectors; returning single-speaker.")
+        return np.zeros((n_samples,), dtype=int)
+    
+    # Replace zero vectors with small random noise to prevent cosine errors
+    embeddings_safe = embeddings.copy()
+    if zero_mask.any():
+        logging.warning(f"Found {zero_mask.sum()} zero embedding vectors; replacing with noise.")
+        for i in np.where(zero_mask)[0]:
+            embeddings_safe[i] = np.random.randn(embeddings.shape[1]).astype(np.float32) * 0.01
+    
+    # Re-normalize after fixing zero vectors
+    norms = np.linalg.norm(embeddings_safe, axis=1, keepdims=True)
+    embeddings_norm = embeddings_safe / (norms + 1e-10)
+    
+    # Find optimal number of clusters using silhouette score
+    best_score = -1.0
+    best_k = 1
+    
+    for k in range(1, min(max_speakers, n_samples) + 1):
+        if k == 1:
+            continue
+        
+        clustering = AgglomerativeClustering(
+            n_clusters=k,
+            metric='cosine',
+            linkage='average'
+        ).fit(embeddings_norm)
+        
+        score = silhouette_score(embeddings_norm, clustering.labels_, metric='cosine')
+        
+        if score > best_score:
+            best_score = score
+            best_k = k
+    
+    if best_k == 1:
+        return np.zeros((n_samples,), dtype=int)
+    
+    # Final clustering with best k
+    clustering = AgglomerativeClustering(
+        n_clusters=best_k,
+        metric='cosine',
+        linkage='average'
+    ).fit(embeddings_norm)
+    
+    return clustering.labels_
+
+
+def _smooth_speaker_labels(segments: List[Tuple[float, float, int]], 
+                           min_duration: float = 0.3,
+                           median_window: int = 3) -> List[Tuple[float, float, int]]:
+    """Apply temporal smoothing to speaker labels.
+    
+    Args:
+        segments: list of (start, end, speaker_id)
+        min_duration: minimum segment duration; merge shorter segments
+        median_window: window size for median filtering
+    
+    Returns: smoothed list of (start, end, speaker_id)
+    """
+    if not segments or len(segments) < 2:
+        return segments
+    
+    import numpy as np
+    
+    # Step 1: Merge very short segments into neighbors
+    merged = []
+    for i, (start, end, spk) in enumerate(segments):
+        duration = end - start
+        if duration < min_duration and merged:
+            # Merge into previous segment
+            prev_start, prev_end, prev_spk = merged[-1]
+            merged[-1] = (prev_start, end, prev_spk)
+        else:
+            merged.append((start, end, spk))
+    
+    if len(merged) < median_window:
+        return merged
+    
+    # Step 2: Apply median filter to speaker labels
+    labels = np.array([spk for (_, _, spk) in merged])
+    smoothed_labels = labels.copy()
+    
+    half_window = median_window // 2
+    for i in range(len(labels)):
+        window_start = max(0, i - half_window)
+        window_end = min(len(labels), i + half_window + 1)
+        window_labels = labels[window_start:window_end]
+        # Use mode (most common label) instead of median for speaker IDs
+        unique, counts = np.unique(window_labels, return_counts=True)
+        smoothed_labels[i] = unique[np.argmax(counts)]
+    
+    # Reconstruct segments with smoothed labels
+    result = []
+    for (start, end, _), new_spk in zip(merged, smoothed_labels):
+        result.append((start, end, int(new_spk)))
+    
+    # Step 3: Merge consecutive segments with same speaker
+    if not result:
+        return result
+    
+    final = [result[0]]
+    for (start, end, spk) in result[1:]:
+        prev_start, prev_end, prev_spk = final[-1]
+        if spk == prev_spk:
+            # Merge with previous
+            final[-1] = (prev_start, end, spk)
+        else:
+            final.append((start, end, spk))
+    
+    return final
 
 
 def assign_speakers_to_asr(asr_segments: List[Dict[str, Any]], diarized_segments: List[Tuple[float, float, int]]):

@@ -44,7 +44,15 @@ class Transcriber:
                 "whisper-base-ct2": "base",
                 "whisper-small-ct2": "small",
                 "whisper-medium-ct2": "medium",
+                # Large family
+                "whisper-large-v2-ct2": "large-v2",
                 "whisper-large-v3-ct2": "large-v3",
+                "whisper-large-v3-turbo-ct2": "large-v3-turbo",
+                # English-only
+                "whisper-small-en-ct2": "small.en",
+                "whisper-medium-en-ct2": "medium.en",
+                # Distilled
+                "whisper-distil-large-v3-ct2": "distil-large-v3",
             }
             return mapping.get(dir_like, dir_like)
 

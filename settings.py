@@ -13,7 +13,12 @@ _DEFAULTS = {
     "filter_profanity": False,
     "log_level": "INFO",
     # Empty string means "next to input file"; otherwise an absolute/relative folder path
-    "output_dir": ""
+    "output_dir": "",
+    # Diarization engine: 'wespeaker' (light, ONNX) or 'speechbrain' (higher quality, heavier)
+    "diarization_engine": "wespeaker"
+    ,
+    # User's favorite models to show in a grouped section of the model picker
+    "favorite_models": []
 }
 
 
@@ -33,6 +38,8 @@ class Settings:
         self.filter_profanity = defaults.get("filter_profanity", _DEFAULTS["filter_profanity"])
         self.log_level = defaults.get("log_level", _DEFAULTS["log_level"])
         self.output_dir = defaults.get("output_dir", _DEFAULTS["output_dir"]) or ""
+        self.diarization_engine = defaults.get("diarization_engine", _DEFAULTS["diarization_engine"]) or "wespeaker"
+        self.favorite_models = list(defaults.get("favorite_models", _DEFAULTS["favorite_models"]))
 
     def to_dict(self):
         return {
@@ -47,7 +54,10 @@ class Settings:
                 "numbers_as_figures": self.numbers_as_figures,
                 "filter_profanity": self.filter_profanity,
                 "log_level": self.log_level,
-                "output_dir": self.output_dir
+                "output_dir": self.output_dir,
+                "diarization_engine": self.diarization_engine
+                ,
+                "favorite_models": self.favorite_models
             }
         }
 

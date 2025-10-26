@@ -4,7 +4,7 @@
     "language_hint": "en",
     "word_timestamps": true,
     "vad_sensitivity": "normal",
-    "diarization_max_speakers": 2,
+    "diarization_max_speakers": 1,
     "device_mode": "auto",
     "output_formats": [
       "txt",
@@ -13,6 +13,10 @@
     "numbers_as_figures": true,
     "filter_profanity": false,
     "log_level": "INFO",
-    "output_dir": ""
+    "output_dir": "/Users/u1775268/Downloads",
+    "diarization_engine": "none",
+    "favorite_models": [
+      "whisper-medium-en-ct2"
+    ]
   }
 }
