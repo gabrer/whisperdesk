@@ -1,6 +1,6 @@
 # WhisperDesk (Offline)
 
-**Portable, offline transcription for Windows 11** using Whisper (faster-whisper/CT2), optional CUDA acceleration, CPU fallback, lightweight diarization (up to 3 speakers), batch processing, and TXT/DOCX output with segment timestamps.
+**Portable, offline transcription for Windows 11 and macOS** using Whisper (faster-whisper/CT2), optional CUDA acceleration, CPU fallback, lightweight diarization (up to 3 speakers), batch processing, and TXT/DOCX output with segment timestamps.
 
 ## End users (no Python needed)
 1. Unzip the package.
@@ -17,10 +17,15 @@ End users only need the compiled WhisperDesk.exe plus the `models/` and `diariza
 
 ## Features
 
-- PySide6 GUI for selecting audio/video files and viewing transcripts
-- faster-whisper transcription using local CT2 models if present
-- Optional diarization pipeline (stubbed initially)
-- Export to TXT and DOCX
+- PySide6 GUI for selecting audio files and viewing progress inline (no popups)
+- faster-whisper transcription using local CT2 models; auto-download on first use if missing
+- Multiple Whisper models supported: tiny/base/small/medium, English-only variants, large-v2, large-v3, large-v3-turbo, and distil-large-v3
+- Favorites group in model selector with one-click star toggle; persists across sessions
+- Optional diarization engines:
+   - SpeechBrain ECAPA (best quality; uses Torch) — default
+   - WeSpeaker ONNX (lightweight; no Torch)
+- Disable diarization option: if disabled or only one speaker detected, speaker labels are omitted in exports
+- Export to TXT and DOCX with segment timestamps; filenames include timestamp_originalName_model
 
 ## Project layout
 
@@ -66,6 +71,8 @@ pip install -r requirements.txt
 ```bash
 python app.py
 ```
+
+Tip: On first use, models may be downloaded automatically. Place pre-downloaded CT2 Whisper models under `models/whisper-*-ct2/` for fully offline operation. Place `diarization_models/ecapa-voxceleb.onnx` to enable ONNX-based embeddings without internet.
 
 ## Build Windows .exe (developer)
 
