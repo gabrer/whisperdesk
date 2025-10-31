@@ -60,18 +60,32 @@ class Transcriber:
 
         # Determine device and compute type
         is_macos = platform.system() == "Darwin"
+        is_windows = platform.system() == "Windows"
+
+        # Check if CUDA is available for GPU acceleration
+        cuda_available = False
+        try:
+            import torch
+            cuda_available = torch.cuda.is_available()
+        except Exception:
+            # If torch is not available or fails, assume no CUDA
+            pass
 
         if device_mode == "gpu":
             device = "cuda"
             compute_type = "float16"
         elif device_mode == "cpu":
             device = "cpu"
-            # Use int8 on macOS for better compatibility
-            compute_type = "int8" if is_macos else "int8_float16"
+            # Use int8 on macOS/Windows for better compatibility
+            compute_type = "int8" if (is_macos or is_windows) else "int8_float16"
         else:  # auto
-            device = "auto"
-            # On macOS, prefer int8 for CPU; on other platforms use float16 if GPU available
-            compute_type = "int8" if is_macos else "float16"
+            if cuda_available:
+                device = "cuda"
+                compute_type = "float16"
+            else:
+                device = "cpu"
+                # Use int8 on macOS/Windows CPU for better compatibility
+                compute_type = "int8" if (is_macos or is_windows) else "int8_float16"
 
         # Report progress if callback provided
         if progress_callback:
