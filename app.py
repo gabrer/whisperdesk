@@ -3,8 +3,8 @@ import sys
 import logging
 from typing import List
 
-from PySide6.QtCore import QThread, Signal
-from PySide6.QtGui import QStandardItemModel, QStandardItem
+from PySide6.QtCore import QThread, Signal, QUrl
+from PySide6.QtGui import QStandardItemModel, QStandardItem, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog,
     QHBoxLayout, QListWidget, QListWidgetItem, QComboBox, QCheckBox, QTabWidget,
@@ -122,7 +122,7 @@ class MainWindow(QWidget):
         self.resize(800, 520)
 
         self.cfg = Settings()
-        setup_logging(self.cfg.log_level)
+        self.log_path = setup_logging(self.cfg.log_level)
 
         v = QVBoxLayout(self)
 
@@ -190,6 +190,11 @@ class MainWindow(QWidget):
         self.btn_cancel.setEnabled(False)
         controls.addWidget(self.btn_cancel)
 
+        # Open logs button
+        self.btn_open_logs = QPushButton("Open Logs")
+        self.btn_open_logs.setToolTip("Open the log folder in your file browser")
+        controls.addWidget(self.btn_open_logs)
+
         v.addLayout(controls)
 
         # Tabs (Advanced)
@@ -204,6 +209,7 @@ class MainWindow(QWidget):
         self.btn_clear.clicked.connect(self.file_list.clear)
         self.btn_transcribe.clicked.connect(self.start_transcription)
         self.btn_cancel.clicked.connect(self.cancel_transcription)
+        self.btn_open_logs.clicked.connect(self.open_logs)
 
         self.worker = None
 
@@ -400,6 +406,16 @@ class MainWindow(QWidget):
     def cancel_transcription(self):
         if self.worker:
             self.worker.cancelled = True
+
+    def open_logs(self):
+        try:
+            log_dir = os.path.dirname(self.log_path) if getattr(self, 'log_path', None) else os.path.join(app_root(), 'logs')
+            if not os.path.isdir(log_dir):
+                os.makedirs(log_dir, exist_ok=True)
+            # Use Qt to open folder cross-platform
+            QDesktopServices.openUrl(QUrl.fromLocalFile(log_dir))
+        except Exception as e:
+            logging.error("Failed to open log folder: %s", e)
 
     def on_progress_update(self, msg: str, pct: int):
         self.progress_label.setText(msg)

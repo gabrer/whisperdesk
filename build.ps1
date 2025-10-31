@@ -19,7 +19,9 @@ param(
   [ValidateSet('onedir','onefile')]
   [string]$Mode = 'onedir',
   [string]$Name = 'WhisperDesk',
-  [switch]$IncludeSpeechBrain
+  [switch]$IncludeSpeechBrain,
+  # When set, build with a visible console (errors will show in console)
+  [switch]$Console
 )
 
 $ErrorActionPreference = 'Stop'
@@ -52,7 +54,7 @@ if ($IncludeSpeechBrain) {
 pyinstaller --noconfirm `
   $modeSwitch `
   --name $Name `
-  --noconsole `
+  $(if ($Console) { '--console' } else { '--noconsole' }) `
   @dataArgs `
   @collectArgs `
   app.py

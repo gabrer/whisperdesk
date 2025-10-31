@@ -79,10 +79,19 @@ class Transcriber:
             if not os.path.isdir(self.model_dir):
                 progress_callback("Downloading model (this may take a few minutes)...", 10)
 
-        # Force faster-whisper to download models to our local models/ folder
+        # Force faster-whisper/HF Hub to download models to our local models/ folder
         # Set download_root to ensure models are stored in models/ instead of user cache
         download_root = models_root()
         os.makedirs(download_root, exist_ok=True)
+        # Also direct Hugging Face caches to the same folder for consistency
+        os.environ["HF_HOME"] = download_root
+        os.environ["HUGGINGFACE_HUB_CACHE"] = download_root
+        logging.info(
+            "Model source: %s | local_dir_exists=%s | download_root=%s",
+            model_id,
+            os.path.isdir(self.model_dir),
+            download_root,
+        )
 
         logging.info("Loading model: %s (device=%s, compute_type=%s)", model_id, device, compute_type)
         # Use configurable number of workers for CTranslate2 (1 = safest, 2-4 = faster but may conflict)
@@ -92,7 +101,7 @@ class Transcriber:
             compute_type=compute_type,
             num_workers=num_workers,
             cpu_threads=1 if device == "cpu" else 4,
-            download_root=download_root
+            download_root=download_root,
         )
 
         if progress_callback:

@@ -1,8 +1,8 @@
 import hashlib
 import json
 import logging
-import os
 import sys
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -54,10 +54,16 @@ def setup_logging(level: Any = logging.INFO) -> str:
 
     fmt = logging.Formatter("%(asctime)s | %(levelname)-8s | %(name)s | %(message)s")
 
-    ch = logging.StreamHandler()
-    ch.setLevel(level_obj)
-    ch.setFormatter(fmt)
-    logger.addHandler(ch)
+    # Console handlers: INFO to stdout, WARN+ to stderr
+    ch_out = logging.StreamHandler(stream=sys.stdout)
+    ch_out.setLevel(min(level_obj, logging.INFO))
+    ch_out.setFormatter(fmt)
+    logger.addHandler(ch_out)
+
+    ch_err = logging.StreamHandler(stream=sys.stderr)
+    ch_err.setLevel(logging.WARNING)
+    ch_err.setFormatter(fmt)
+    logger.addHandler(ch_err)
 
     fh = logging.FileHandler(log_path, encoding="utf-8")
     fh.setLevel(level_obj)

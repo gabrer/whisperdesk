@@ -2,8 +2,9 @@
     "recommendations": [
         "EditorConfig.EditorConfig",
         "streetsidesoftware.code-spell-checker",
-        "esbenp.prettier-vscode",
-        "dbaeumer.vscode-eslint"
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter"
     ],
     "unwantedRecommendations": []
 }
