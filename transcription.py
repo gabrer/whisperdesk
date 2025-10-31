@@ -79,14 +79,20 @@ class Transcriber:
             if not os.path.isdir(self.model_dir):
                 progress_callback("Downloading model (this may take a few minutes)...", 10)
 
+        # Force faster-whisper to download models to our local models/ folder
+        # Set download_root to ensure models are stored in models/ instead of user cache
+        download_root = models_root()
+        os.makedirs(download_root, exist_ok=True)
+
         logging.info("Loading model: %s (device=%s, compute_type=%s)", model_id, device, compute_type)
         # Use single thread for CTranslate2 to avoid conflicts with Qt threading
         self.model = WhisperModel(
-            model_id, 
-            device=device, 
+            model_id,
+            device=device,
             compute_type=compute_type,
             num_workers=1,
-            cpu_threads=1 if device == "cpu" else 4
+            cpu_threads=1 if device == "cpu" else 4,
+            download_root=download_root
         )
 
         if progress_callback:
