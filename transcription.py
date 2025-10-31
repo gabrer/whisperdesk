@@ -24,7 +24,7 @@ class Segment(TypedDict, total=False):
 __all__ = ["Transcriber", "Segment", "Word"]
 
 class Transcriber:
-    def __init__(self, model_name: str, device_mode: str = "auto", language_hint: str = "en", word_timestamps: bool = False, progress_callback: Optional[Callable[[str, int], None]] = None):
+    def __init__(self, model_name: str, device_mode: str = "auto", language_hint: str = "en", word_timestamps: bool = False, num_workers: int = 1, progress_callback: Optional[Callable[[str, int], None]] = None):
         # Import here so app import succeeds even if dependency is missing
         try:
             from faster_whisper import WhisperModel  # type: ignore
@@ -85,12 +85,12 @@ class Transcriber:
         os.makedirs(download_root, exist_ok=True)
 
         logging.info("Loading model: %s (device=%s, compute_type=%s)", model_id, device, compute_type)
-        # Use single thread for CTranslate2 to avoid conflicts with Qt threading
+        # Use configurable number of workers for CTranslate2 (1 = safest, 2-4 = faster but may conflict)
         self.model = WhisperModel(
             model_id,
             device=device,
             compute_type=compute_type,
-            num_workers=1,
+            num_workers=num_workers,
             cpu_threads=1 if device == "cpu" else 4,
             download_root=download_root
         )

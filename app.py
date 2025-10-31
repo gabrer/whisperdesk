@@ -40,12 +40,13 @@ class Worker(QThread):
             on_progress("Initializing model...", 0)
             # Set environment variable to avoid OpenMP conflicts with Qt
             os.environ['OMP_NUM_THREADS'] = '1'
-            
+
             tr = Transcriber(
                 model_name=self.model_name,
                 device_mode=self.cfg.device_mode,
                 language_hint=self.cfg.language_hint,
                 word_timestamps=self.cfg.word_timestamps,
+                num_workers=self.cfg.num_workers,
                 progress_callback=on_progress
             )
             on_progress("Model ready.", 100)
@@ -76,11 +77,11 @@ class Worker(QThread):
                 # default speaker map
                 spk_ids = sorted(set([s.get("speaker", 0) for s in segs]))
                 speaker_map = {i: f"Speaker {i+1}" for i in spk_ids}
-                
+
                 # Determine if we should include speaker labels
                 include_speakers = (
-                    self.cfg.diarization_engine != 'none' 
-                    and self.cfg.diarization_max_speakers > 1 
+                    self.cfg.diarization_engine != 'none'
+                    and self.cfg.diarization_max_speakers > 1
                     and len(spk_ids) > 1
                 )
 
@@ -93,14 +94,14 @@ class Worker(QThread):
                 else:
                     # Use same directory as input file
                     out_dir = os.path.dirname(os.path.abspath(wav))
-                
+
                 # Build filename: YYYYMMDD_HHMM_originalName_modelName.ext
                 from datetime import datetime
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M")
                 original_name = os.path.splitext(os.path.basename(wav))[0]
                 model_short = self.model_name.replace("whisper-", "").replace("-ct2", "")
                 base_name = f"{timestamp}_{original_name}_{model_short}"
-                
+
                 out_txt = os.path.join(out_dir, base_name + ".txt")
                 out_docx = os.path.join(out_dir, base_name + ".docx")
                 if "txt" in self.cfg.output_formats:
@@ -322,6 +323,12 @@ class MainWindow(QWidget):
         self.device_combo.addItems(["auto", "gpu", "cpu"])
         self.device_combo.setCurrentText(self.cfg.device_mode)
         f.addRow("Device:", self.device_combo)
+        # Number of workers
+        self.num_workers_combo = QComboBox()
+        self.num_workers_combo.addItems(["1 (safest)", "2", "3", "4 (fastest)"])
+        self.num_workers_combo.setCurrentIndex(self.cfg.num_workers - 1)
+        self.num_workers_combo.setToolTip("Number of parallel CTranslate2 workers. 1 is safest; higher values may be faster but can conflict with Qt on some systems.")
+        f.addRow("Worker threads:", self.num_workers_combo)
         return w
 
     def add_files(self):
@@ -360,6 +367,9 @@ class MainWindow(QWidget):
             self.cfg.diarization_engine = 'wespeaker'
         self.cfg.device_mode = self.device_combo.currentText()
         self.cfg.output_dir = self.output_dir_edit.text().strip()
+        # Parse num_workers from combo (text is like "1 (safest)" or "4 (fastest)")
+        workers_text = self.num_workers_combo.currentText()
+        self.cfg.num_workers = int(workers_text.split()[0])
         fmts = []
         if self.chk_txt.isChecked():
             fmts.append("txt")

@@ -15,10 +15,11 @@ _DEFAULTS = {
     # Empty string means "next to input file"; otherwise an absolute/relative folder path
     "output_dir": "",
     # Diarization engine: 'wespeaker' (light, ONNX) or 'speechbrain' (higher quality, heavier)
-    "diarization_engine": "wespeaker"
-    ,
+    "diarization_engine": "wespeaker",
     # User's favorite models to show in a grouped section of the model picker
-    "favorite_models": []
+    "favorite_models": [],
+    # Number of worker threads for CTranslate2 (1 = safer, 2-4 = faster but may conflict with Qt)
+    "num_workers": 1
 }
 
 
@@ -40,6 +41,7 @@ class Settings:
         self.output_dir = defaults.get("output_dir", _DEFAULTS["output_dir"]) or ""
         self.diarization_engine = defaults.get("diarization_engine", _DEFAULTS["diarization_engine"]) or "wespeaker"
         self.favorite_models = list(defaults.get("favorite_models", _DEFAULTS["favorite_models"]))
+        self.num_workers = int(defaults.get("num_workers", _DEFAULTS["num_workers"]))
 
     def to_dict(self):
         return {
@@ -55,9 +57,9 @@ class Settings:
                 "filter_profanity": self.filter_profanity,
                 "log_level": self.log_level,
                 "output_dir": self.output_dir,
-                "diarization_engine": self.diarization_engine
-                ,
-                "favorite_models": self.favorite_models
+                "diarization_engine": self.diarization_engine,
+                "favorite_models": self.favorite_models,
+                "num_workers": self.num_workers
             }
         }
 
