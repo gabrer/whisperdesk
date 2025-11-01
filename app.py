@@ -43,9 +43,17 @@ class Worker(QThread):
             self.progress_update.emit(msg, pct)
 
         try:
-            on_progress("Initializing model...", 0)
-            # Set environment variable to avoid OpenMP conflicts with Qt
+            on_progress("Initializing model (this may download files if needed)...", 0)
+            # Set environment variables to avoid OpenMP conflicts with Qt
             os.environ['OMP_NUM_THREADS'] = '1'
+
+            # Fix HuggingFace download issues on Windows
+            # Disable Xet storage which can cause hangs
+            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+            os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '0'
+
+            # Set download timeout (in seconds) to prevent infinite hangs
+            os.environ['HF_HUB_DOWNLOAD_TIMEOUT'] = '300'  # 5 minutes timeout
 
             tr = Transcriber(
                 model_name=self.model_name,
@@ -67,8 +75,23 @@ class Worker(QThread):
                 ensure_ecapa_model(progress_callback=on_progress)
         except Exception as e:
             import traceback
-            logging.error("Model initialization failed: %s\n%s", e, traceback.format_exc())
-            self.file_error.emit("<init>", str(e))
+            error_msg = str(e)
+
+            # Provide helpful message for common download timeout issues
+            if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                error_msg = (
+                    f"Model download timed out. This can happen with slow connections or network issues. "
+                    f"Try: (1) Check your internet connection, (2) Manually download the model to {models_root()}, "
+                    f"or (3) Use a smaller model. Original error: {error_msg}"
+                )
+            elif "huggingface" in error_msg.lower() or "hf" in error_msg.lower():
+                error_msg = (
+                    f"HuggingFace download failed. Try manually downloading the model to {models_root()}. "
+                    f"Original error: {error_msg}"
+                )
+
+            logging.error("Model initialization failed: %s\n%s", error_msg, traceback.format_exc())
+            self.file_error.emit("<init>", error_msg)
             self.all_done.emit()
             return
 
@@ -727,7 +750,11 @@ class MainWindow(QWidget):
         # Inform users when selection will trigger a download
         model_dir = os.path.join(models_root(), model_name)
         if not os.path.isdir(model_dir):
-            self.progress_label.setText(f"ℹ️ Model '{model_name}' will be downloaded automatically on first use.")
+            self.progress_label.setText(
+                f"ℹ️ Model '{model_name}' will be downloaded on first use. "
+                f"This may take several minutes depending on your connection. "
+                f"If download hangs, manually place model files in: {models_root()}"
+            )
 
         # Cap workers for very large models and warn if memory appears low
         try:
@@ -833,11 +860,18 @@ class MainWindow(QWidget):
 
     def on_progress_update(self, msg: str, pct: int):
         self.progress_label.setText(msg)
-        self.progress_bar.setValue(pct)
-        if pct > 0 and pct < 100:
+        # Use indeterminate progress bar (busy indicator) when percentage is 0
+        # This is useful during model download which has no progress tracking
+        if pct == 0:
+            self.progress_bar.setRange(0, 0)  # Indeterminate/busy mode
             self.progress_bar.setVisible(True)
-        elif pct >= 100:
-            self.progress_bar.setVisible(False)
+        else:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(pct)
+            if pct > 0 and pct < 100:
+                self.progress_bar.setVisible(True)
+            elif pct >= 100:
+                self.progress_bar.setVisible(False)
 
     def on_device_info(self, text: str):
         self.device_runtime_label.setText(f"Runtime device: {text}")
