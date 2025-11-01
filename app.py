@@ -191,7 +191,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("WhisperDesk")
-        self.resize(1000, 720)
+        self.resize(1000, 800)
 
         self.cfg = Settings()
         self.log_path = setup_logging(self.cfg.log_level)
@@ -1304,7 +1304,7 @@ def main():
 
     w = MainWindow()
     w.setWindowTitle("WhisperDesk")
-    w.setMinimumSize(1000, 720)
+    w.setMinimumSize(1000, 800)
     w.show()
 
     exit_code = app.exec()
