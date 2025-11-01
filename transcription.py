@@ -144,8 +144,9 @@ class Transcriber:
         # Also direct Hugging Face caches to the same folder for consistency
         os.environ["HF_HOME"] = download_root
         os.environ["HUGGINGFACE_HUB_CACHE"] = download_root
-        # Prefer accelerated transfer if available (no-op if package not installed)
-        os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+        # Explicitly disable hf_transfer to avoid requiring Rust-based package (cross-platform compatibility)
+        # hf_transfer requires Rust compiler and may not work on all Windows/macOS setups
+        os.environ.pop("HF_HUB_ENABLE_HF_TRANSFER", None)  # Remove if set externally
         logging.info(
             "Model source: %s | local_dir_exists=%s | download_root=%s",
             model_id,
