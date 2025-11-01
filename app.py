@@ -24,6 +24,7 @@ class Worker(QThread):
     file_error = Signal(str, str)
     all_done = Signal()
     progress_update = Signal(str, int)  # (message, percentage 0-100)
+    device_info = Signal(str)  # e.g., "cpu (int8)" or "cuda (float16)"
 
     def __init__(self, files: List[str], cfg: Settings, model_name: str, parent=None):
         super().__init__(parent)
@@ -49,6 +50,12 @@ class Worker(QThread):
                 num_workers=self.cfg.num_workers,
                 progress_callback=on_progress
             )
+            # Inform UI about the actual runtime device in use
+            try:
+                info = f"{getattr(tr, 'active_device', self.cfg.device_mode)} ({getattr(tr, 'active_compute_type', 'unknown')})"
+                self.device_info.emit(info)
+            except Exception:
+                pass
             on_progress("Model ready.", 100)
             # Pre-fetch diarization model if user requested multi-speaker diarization and engine is enabled
             if self.cfg.diarization_max_speakers > 1 and self.cfg.diarization_engine != 'none':
@@ -138,6 +145,9 @@ class MainWindow(QWidget):
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
         v.addWidget(self.progress_bar)
+        # Runtime device indicator
+        self.device_runtime_label = QLabel("Runtime device: —")
+        v.addWidget(self.device_runtime_label)
 
         # File list + controls
         self.file_list = QListWidget()
@@ -412,6 +422,7 @@ class MainWindow(QWidget):
         self.worker.file_error.connect(self.on_file_error)
         self.worker.all_done.connect(self.on_all_done)
         self.worker.progress_update.connect(self.on_progress_update)
+        self.worker.device_info.connect(self.on_device_info)
         self.worker.start()
 
     def cancel_transcription(self):
@@ -435,6 +446,9 @@ class MainWindow(QWidget):
             self.progress_bar.setVisible(True)
         elif pct >= 100:
             self.progress_bar.setVisible(False)
+
+    def on_device_info(self, text: str):
+        self.device_runtime_label.setText(f"Runtime device: {text}")
 
     def on_file_done(self, wav):
         logging.info("Done: %s", wav)
