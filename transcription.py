@@ -118,33 +118,63 @@ class Transcriber:
             compute_types_to_try.extend(["int8_float32", "int8_float16", "int8"])
 
         last_error = None
-        for ct in compute_types_to_try:
-            try:
-                logging.info("Attempting to load model with compute_type=%s", ct)
+        loaded = False
+        if device == "cuda":
+            for ct in compute_types_to_try:
+                try:
+                    logging.info("Attempting to load model with compute_type=%s", ct)
+                    self.model = WhisperModel(
+                        model_id,
+                        device=device,
+                        compute_type=ct,
+                        num_workers=num_workers,
+                        cpu_threads=1 if device == "cpu" else 4,
+                        download_root=download_root,
+                    )
+                    if ct != compute_type:
+                        logging.warning("Fell back to compute_type=%s (original %s not supported)", ct, compute_type)
+                    loaded = True
+                    break  # Success, exit loop
+                except ValueError as e:
+                    if "compute type" in str(e).lower():
+                        logging.warning("compute_type=%s not supported on GPU, trying fallback...", ct)
+                        last_error = e
+                        continue
+                    else:
+                        # Different error on GPU, record and break to CPU fallback
+                        last_error = e
+                        break
+
+            if not loaded:
+                # Attempt CPU fallback
+                cpu_ct = "int8" if (is_macos or is_windows) else "int8_float16"
+                logging.warning(
+                    "GPU initialization failed (%s). Falling back to CPU with compute_type=%s.",
+                    str(last_error) if last_error else "unknown error",
+                    cpu_ct,
+                )
+                if progress_callback:
+                    progress_callback("GPU unavailable/unsupported; falling back to CPU...", 15)
                 self.model = WhisperModel(
                     model_id,
-                    device=device,
-                    compute_type=ct,
+                    device="cpu",
+                    compute_type=cpu_ct,
                     num_workers=num_workers,
-                    cpu_threads=1 if device == "cpu" else 4,
+                    cpu_threads=1,
                     download_root=download_root,
                 )
-                if ct != compute_type:
-                    logging.warning("Fell back to compute_type=%s (original %s not supported)", ct, compute_type)
-                break  # Success, exit loop
-            except ValueError as e:
-                if "compute type" in str(e).lower():
-                    logging.warning("compute_type=%s not supported, trying fallback...", ct)
-                    last_error = e
-                    continue
-                else:
-                    # Different error, don't retry
-                    raise
+                loaded = True
+                logging.warning("CPU fallback succeeded (compute_type=%s)", cpu_ct)
         else:
-            # All compute types failed
-            if last_error:
-                raise last_error
-            raise RuntimeError(f"Failed to load model with any compute type: {compute_types_to_try}")
+            # Non-GPU path: just load with the chosen CPU compute type
+            self.model = WhisperModel(
+                model_id,
+                device=device,
+                compute_type=compute_type,
+                num_workers=num_workers,
+                cpu_threads=1,
+                download_root=download_root,
+            )
 
         if progress_callback:
             progress_callback("Model loaded.", 100)
