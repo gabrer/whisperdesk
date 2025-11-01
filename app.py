@@ -191,15 +191,19 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("WhisperDesk")
-        self.resize(1000, 800)
+        self.resize(1200, 800)
 
         self.cfg = Settings()
         self.log_path = setup_logging(self.cfg.log_level)
 
         # Main layout with proper margins
-        main_layout = QVBoxLayout(self)
+        main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(16)
+
+        # Left column - main content
+        left_column = QVBoxLayout()
+        left_column.setSpacing(16)
 
         # Progress card - MOVED TO TOP
         progress_card = QFrame()
@@ -219,7 +223,7 @@ class MainWindow(QWidget):
         self.progress_bar.setTextVisible(False)
         progress_layout.addWidget(self.progress_bar)
 
-        main_layout.addWidget(progress_card)
+        left_column.addWidget(progress_card)
 
         # Header card - Device info (now below progress)
         header_card = QFrame()
@@ -236,7 +240,7 @@ class MainWindow(QWidget):
         self.device_runtime_label.setObjectName("caption")
         header_layout.addWidget(self.device_runtime_label)
 
-        main_layout.addWidget(header_card)
+        left_column.addWidget(header_card)
 
         # File list card
         file_card = QFrame()
@@ -271,7 +275,7 @@ class MainWindow(QWidget):
         btn_row.addWidget(self.btn_clear)
         file_card_layout.addLayout(btn_row)
 
-        main_layout.addWidget(file_card, 1)
+        left_column.addWidget(file_card, 1)
 
         # Controls card
         controls_card = QFrame()
@@ -323,7 +327,7 @@ class MainWindow(QWidget):
         format_row.addStretch()
         controls_card_layout.addLayout(format_row)
 
-        main_layout.addWidget(controls_card)
+        left_column.addWidget(controls_card)
 
         # Action buttons row
         action_row = QHBoxLayout()
@@ -349,13 +353,23 @@ class MainWindow(QWidget):
         action_row.addWidget(self.btn_open_output)
         action_row.addWidget(self.btn_open_logs)
 
-        main_layout.addLayout(action_row)
+        left_column.addLayout(action_row)
+
+        # Add left column to main layout
+        main_layout.addLayout(left_column, 2)
+
+        # Right column - Settings panel
+        right_column = QVBoxLayout()
+        right_column.setSpacing(16)
 
         # Settings tabs
         tabs = QTabWidget()
         tabs.addTab(self._build_easy_tab(), "Basic Settings")
         tabs.addTab(self._build_advanced_tab(), "Advanced Settings")
-        main_layout.addWidget(tabs)
+        right_column.addWidget(tabs)
+
+        # Add right column to main layout
+        main_layout.addLayout(right_column, 1)
 
         # Update parallel hint
         try:
@@ -1095,7 +1109,7 @@ def main():
             color: #424242;
             border: 1px solid #e0e0e0;
             border-radius: 6px;
-            padding: 6px 12px;
+            padding: 4px 6px;
             font-weight: 500;
             min-height: 28px;
         }
@@ -1117,7 +1131,7 @@ def main():
 
         /* Line Edit */
         QLineEdit {
-            padding: 8px 12px;
+            padding: 2px 4px;
             border: 1px solid #e0e0e0;
             border-radius: 6px;
             background-color: #ffffff;
@@ -1137,7 +1151,7 @@ def main():
 
         /* Combo Box */
         QComboBox {
-            padding: 8px 12px;
+            padding: 2px 6px;
             border: 1px solid #e0e0e0;
             border-radius: 6px;
             background-color: #ffffff;
@@ -1304,7 +1318,7 @@ def main():
 
     w = MainWindow()
     w.setWindowTitle("WhisperDesk")
-    w.setMinimumSize(1000, 800)
+    w.setMinimumSize(1200, 800)
     w.show()
 
     exit_code = app.exec()
