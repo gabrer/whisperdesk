@@ -201,42 +201,42 @@ class MainWindow(QWidget):
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(16)
 
-        # Header card - Status and device info
-        header_card = QFrame()
-        header_card.setObjectName("card")
-        header_layout = QVBoxLayout(header_card)
-        header_layout.setContentsMargins(16, 12, 16, 12)
-        header_layout.setSpacing(8)
-        
-        self.status_label = QLabel(device_banner(is_gpu=(self.cfg.device_mode != 'cpu')))
-        self.status_label.setObjectName("subtitle")
-        header_layout.addWidget(self.status_label)
-        
-        self.device_runtime_label = QLabel("Runtime device: —")
-        self.device_runtime_label.setObjectName("caption")
-        header_layout.addWidget(self.device_runtime_label)
-        
-        main_layout.addWidget(header_card)
-
-        # Progress card
+        # Progress card - MOVED TO TOP
         progress_card = QFrame()
         progress_card.setObjectName("card")
         progress_layout = QVBoxLayout(progress_card)
         progress_layout.setContentsMargins(16, 12, 16, 12)
         progress_layout.setSpacing(8)
-        
+
         self.progress_label = QLabel("Ready to transcribe")
         self.progress_label.setObjectName("body")
         progress_layout.addWidget(self.progress_label)
-        
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
         self.progress_bar.setTextVisible(False)
         progress_layout.addWidget(self.progress_bar)
-        
+
         main_layout.addWidget(progress_card)
+
+        # Header card - Device info (now below progress)
+        header_card = QFrame()
+        header_card.setObjectName("card")
+        header_layout = QVBoxLayout(header_card)
+        header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setSpacing(8)
+
+        self.status_label = QLabel(device_banner(is_gpu=(self.cfg.device_mode != 'cpu')))
+        self.status_label.setObjectName("subtitle")
+        header_layout.addWidget(self.status_label)
+
+        self.device_runtime_label = QLabel("Runtime device: —")
+        self.device_runtime_label.setObjectName("caption")
+        header_layout.addWidget(self.device_runtime_label)
+
+        main_layout.addWidget(header_card)
 
         # File list card
         file_card = QFrame()
@@ -244,12 +244,12 @@ class MainWindow(QWidget):
         file_card_layout = QVBoxLayout(file_card)
         file_card_layout.setContentsMargins(16, 16, 16, 16)
         file_card_layout.setSpacing(12)
-        
+
         # File list header
         file_header = QLabel("Audio Files")
         file_header.setObjectName("cardTitle")
         file_card_layout.addWidget(file_header)
-        
+
         # File list
         self.file_list = QListWidget()
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -270,7 +270,7 @@ class MainWindow(QWidget):
         btn_row.addWidget(self.btn_remove)
         btn_row.addWidget(self.btn_clear)
         file_card_layout.addLayout(btn_row)
-        
+
         main_layout.addWidget(file_card, 1)
 
         # Controls card
@@ -279,12 +279,12 @@ class MainWindow(QWidget):
         controls_card_layout = QVBoxLayout(controls_card)
         controls_card_layout.setContentsMargins(16, 16, 16, 16)
         controls_card_layout.setSpacing(12)
-        
+
         # Controls header
         controls_header = QLabel("Configuration")
         controls_header.setObjectName("cardTitle")
         controls_card_layout.addWidget(controls_header)
-        
+
         # Model selection row
         model_row = QHBoxLayout()
         model_row.setSpacing(8)
@@ -295,7 +295,7 @@ class MainWindow(QWidget):
         texts = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
         if pref in texts:
             self.model_combo.setCurrentText(pref)
-        
+
         self.btn_fav = QPushButton("★")
         self.btn_fav.setFixedWidth(36)
         self.btn_fav.setObjectName("btn_icon")
@@ -303,12 +303,12 @@ class MainWindow(QWidget):
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
         self.btn_fav.clicked.connect(self._toggle_favorite)
         self._on_model_changed(self.model_combo.currentText())
-        
+
         model_row.addWidget(model_label)
         model_row.addWidget(self.model_combo, 1)
         model_row.addWidget(self.btn_fav)
         controls_card_layout.addLayout(model_row)
-        
+
         # Output formats row
         format_row = QHBoxLayout()
         format_row.setSpacing(12)
@@ -322,41 +322,41 @@ class MainWindow(QWidget):
         format_row.addWidget(self.chk_docx)
         format_row.addStretch()
         controls_card_layout.addLayout(format_row)
-        
+
         main_layout.addWidget(controls_card)
 
         # Action buttons row
         action_row = QHBoxLayout()
         action_row.setSpacing(8)
-        
+
         self.btn_transcribe = QPushButton("Start Transcription")
         self.btn_transcribe.setObjectName("btn_primary")
-        self.btn_transcribe.setMinimumHeight(40)
-        
+        self.btn_transcribe.setMinimumHeight(36)
+
         self.btn_stop = QPushButton("Stop")
         self.btn_stop.setObjectName("btn_danger")
         self.btn_stop.setEnabled(False)
-        self.btn_stop.setMinimumHeight(40)
-        
+        self.btn_stop.setMinimumHeight(36)
+
         self.btn_open_output = QPushButton("Open Output")
         self.btn_open_output.setObjectName("btn_secondary")
-        
+
         self.btn_open_logs = QPushButton("Open Logs")
         self.btn_open_logs.setObjectName("btn_secondary")
-        
+
         action_row.addWidget(self.btn_transcribe, 2)
         action_row.addWidget(self.btn_stop, 1)
         action_row.addWidget(self.btn_open_output)
         action_row.addWidget(self.btn_open_logs)
-        
+
         main_layout.addLayout(action_row)
 
         # Settings tabs
         tabs = QTabWidget()
-        tabs.addTab(self._build_easy_tab(), "Language & Output")
+        tabs.addTab(self._build_easy_tab(), "Basic Settings")
         tabs.addTab(self._build_advanced_tab(), "Advanced Settings")
         main_layout.addWidget(tabs)
-        
+
         # Update parallel hint
         try:
             self.device_combo.currentTextChanged.connect(self._update_parallel_hint)
@@ -939,15 +939,21 @@ def main():
 
         /* Main Window */
         QWidget {
-            background-color: #fafafa;
+            background-color: #f5f5f5;
             color: #1e1e1e;
         }
 
         /* Cards - Framed panels with subtle shadows */
         QFrame#card {
             background-color: #ffffff;
-            border: 1px solid #e0e0e0;
+            border: 1px solid #d0d0d0;
             border-radius: 8px;
+            /* Add subtle shadow for better separation */
+        }
+
+        /* Add subtle inner shadow effect for better visual separation */
+        QFrame#card:focus {
+            border: 1px solid #d0d0d0;
         }
 
         /* Typography */
@@ -966,7 +972,7 @@ def main():
 
         QLabel#body {
             font-size: 13px;
-            color: #424242;
+            /* color: #424242; */
         }
 
         QLabel#caption {
@@ -977,17 +983,18 @@ def main():
         QLabel {
             color: #424242;
             padding: 2px;
+            background-color: transparent;
         }
 
         /* Tab Widget */
         QTabWidget::pane {
-            border: 1px solid #e0e0e0;
+            border: 1px solid #d0d0d0;
             border-radius: 8px;
             background-color: #ffffff;
-            padding: 16px;
+            padding: 8px;
             top: -1px;
         }
-        
+
         QTabBar::tab {
             background-color: transparent;
             color: #757575;
@@ -997,26 +1004,26 @@ def main():
             border-bottom: 2px solid transparent;
             font-weight: 500;
         }
-        
+
         QTabBar::tab:selected {
             color: #1e1e1e;
             border-bottom: 2px solid #0078d4;
         }
-        
+
         QTabBar::tab:hover:!selected {
             color: #424242;
             background-color: rgba(0, 0, 0, 0.02);
         }
-        
+
         /* Primary Button */
         QPushButton#btn_primary {
             background-color: #0078d4;
             color: white;
             border: none;
             border-radius: 6px;
-            padding: 8px 16px;
+            padding: 6px 14px;
             font-weight: 500;
-            min-height: 32px;
+            min-height: 28px;
         }
 
         QPushButton#btn_primary:hover {
@@ -1038,9 +1045,9 @@ def main():
             color: white;
             border: none;
             border-radius: 6px;
-            padding: 8px 16px;
+            padding: 6px 14px;
             font-weight: 500;
-            min-height: 32px;
+            min-height: 28px;
         }
 
         QPushButton#btn_danger:hover {
@@ -1062,9 +1069,9 @@ def main():
             color: #424242;
             border: 1px solid #e0e0e0;
             border-radius: 6px;
-            padding: 8px 16px;
+            padding: 6px 12px;
             font-weight: 500;
-            min-height: 32px;
+            min-height: 28px;
         }
 
         QPushButton#btn_secondary:hover, QPushButton#btn_icon:hover {
@@ -1088,9 +1095,9 @@ def main():
             color: #424242;
             border: 1px solid #e0e0e0;
             border-radius: 6px;
-            padding: 8px 16px;
+            padding: 6px 12px;
             font-weight: 500;
-            min-height: 32px;
+            min-height: 28px;
         }
 
         QPushButton:hover {
@@ -1107,7 +1114,7 @@ def main():
             color: #9e9e9e;
             border-color: #e0e0e0;
         }
-        
+
         /* Line Edit */
         QLineEdit {
             padding: 8px 12px;
@@ -1123,7 +1130,7 @@ def main():
             border: 1px solid #0078d4;
             background-color: #ffffff;
         }
-        
+
         QLineEdit:hover {
             border-color: #bdbdbd;
         }
@@ -1141,48 +1148,9 @@ def main():
         QComboBox:focus {
             border: 1px solid #0078d4;
         }
-        
+
         QComboBox:hover {
             border-color: #bdbdbd;
-        }        /* Line Edit */
-        QLineEdit {
-            padding: 10px 14px;
-            border: 1px solid rgba(226, 232, 240, 0.8);
-            border-radius: 8px;
-            background-color: rgba(248, 250, 252, 0.5);
-            selection-background-color: rgba(99, 102, 241, 0.2);
-            color: #1e293b;
-            min-height: 36px;
-        }
-
-        QLineEdit:focus {
-            border: 1px solid rgba(99, 102, 241, 0.4);
-            background-color: white;
-        }
-
-        QLineEdit:hover {
-            background-color: white;
-            border-color: rgba(99, 102, 241, 0.2);
-        }
-
-        /* Combo Box */
-        QComboBox {
-            padding: 10px 14px;
-            border: 1px solid rgba(226, 232, 240, 0.8);
-            border-radius: 8px;
-            background-color: rgba(248, 250, 252, 0.5);
-            color: #1e293b;
-            min-height: 36px;
-        }
-
-        QComboBox:focus {
-            border: 1px solid rgba(99, 102, 241, 0.4);
-            background-color: white;
-        }
-
-        QComboBox:hover {
-            background-color: white;
-            border-color: rgba(99, 102, 241, 0.2);
         }
 
         QComboBox::drop-down {
@@ -1327,7 +1295,7 @@ def main():
 
         /* Form Layout Spacing */
         QFormLayout {
-            spacing: 12px;
+            spacing: 8px;
         }
     """
 
