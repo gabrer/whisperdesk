@@ -17,22 +17,12 @@ from settings import Settings
 from transcription import Transcriber
 from diarization import diarize, assign_speakers_to_asr, ensure_ecapa_model
 from exporters import export_txt, export_docx
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from parallel_exec import mp_initializer, mp_transcribe_and_export, thread_transcribe_and_export
 
 
 class Worker(QThread):
     file_done = Signal(str)
-    file_error = Signal(str, str)
-    all_done = Signal()
-    progress_update = Signal(str, int)  # (message, percentage 0-100)
-    device_info = Signal(str)  # e.g., "cpu (int8)" or "cuda (float16)"
-
-    def __init__(self, files: List[str], cfg: Settings, model_name: str, parent=None):
-        super().__init__(parent)
-        self.files = files
-        self.cfg = cfg
-        self.model_name = model_name
-        self.cancelled = False
-
     def run(self):
         def on_progress(msg: str, pct: int):
             self.progress_update.emit(msg, pct)
@@ -67,58 +57,133 @@ class Worker(QThread):
             self.all_done.emit()
             return
 
-        for wav in self.files:
-            if self.cancelled:
-                break
+        processed = set()
+        parallel_executed = False
+
+        # Decide parallelization strategy: prefer multiprocessing on CPU; avoid parallel on single GPU
+        active_device = getattr(tr, 'active_device', self.cfg.device_mode)
+        use_parallel = (
+            active_device == 'cpu' and
+            self.cfg.num_workers > 1 and
+            len(self.files) > 1
+        )
+
+        if use_parallel:
+            # Build per-file task payloads
+            tasks = []
+            for wav in self.files:
+                tasks.append({
+                    "wav": wav,
+                    "model_name": self.model_name,
+                    # Force CPU for parallel workers to prevent GPU contention
+                    "device_mode": 'cpu',
+                    "language_hint": self.cfg.language_hint,
+                    "word_timestamps": self.cfg.word_timestamps,
+                    # Avoid over-subscription: 1 worker inside each process/thread
+                    "num_workers": 1,
+                    "output_dir": (self.cfg.output_dir or "").strip(),
+                    "output_formats": list(self.cfg.output_formats or ["txt"]),
+                    "diarization_engine": self.cfg.diarization_engine,
+                    "diarization_max_speakers": int(self.cfg.diarization_max_speakers),
+                })
+
+            self.progress_update.emit(
+                f"Processing {len(tasks)} files in parallel on CPU (workers: {self.cfg.num_workers})…",
+                1,
+            )
+            # Attempt multiprocessing first
             try:
-                on_progress(f"Transcribing {os.path.basename(wav)}...", 0)
-                asr = tr.transcribe(wav)
-                # If diarization is disabled or single-speaker is selected, assign all to Speaker 1
-                if self.cfg.diarization_engine == 'none' or self.cfg.diarization_max_speakers <= 1:
-                    duration = float(asr.get("duration", 0.0))
-                    diar = [(0.0, duration, 0)]
-                else:
-                    diar = diarize(wav, max_speakers=self.cfg.diarization_max_speakers, engine=self.cfg.diarization_engine)
-                segs = assign_speakers_to_asr(asr["segments"], diar)
-
-                # default speaker map
-                spk_ids = sorted(set([s.get("speaker", 0) for s in segs]))
-                speaker_map = {i: f"Speaker {i+1}" for i in spk_ids}
-
-                # Determine if we should include speaker labels
-                include_speakers = (
-                    self.cfg.diarization_engine != 'none'
-                    and self.cfg.diarization_max_speakers > 1
-                    and len(spk_ids) > 1
-                )
-
-                # Determine output base path (respect configured output directory if set)
-                out_dir = (self.cfg.output_dir or "").strip()
-                if out_dir:
-                    if not os.path.isabs(out_dir):
-                        out_dir = os.path.abspath(out_dir)
-                    os.makedirs(out_dir, exist_ok=True)
-                else:
-                    # Use same directory as input file
-                    out_dir = os.path.dirname(os.path.abspath(wav))
-
-                # Build filename: YYYYMMDD_HHMM_originalName_modelName.ext
-                from datetime import datetime
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-                original_name = os.path.splitext(os.path.basename(wav))[0]
-                model_short = self.model_name.replace("whisper-", "").replace("-ct2", "")
-                base_name = f"{timestamp}_{original_name}_{model_short}"
-
-                out_txt = os.path.join(out_dir, base_name + ".txt")
-                out_docx = os.path.join(out_dir, base_name + ".docx")
-                if "txt" in self.cfg.output_formats:
-                    export_txt(out_txt, segs, speaker_map, include_speakers=include_speakers)
-                if "docx" in self.cfg.output_formats:
-                    export_docx(out_docx, segs, speaker_map, include_speakers=include_speakers)
-
-                self.file_done.emit(wav)
+                with ProcessPoolExecutor(
+                    max_workers=self.cfg.num_workers,
+                    initializer=mp_initializer,
+                    initargs=(self.model_name, 'cpu', self.cfg.language_hint, self.cfg.word_timestamps, 1),
+                ) as ex:
+                    fut_map = {ex.submit(mp_transcribe_and_export, t): t["wav"] for t in tasks}
+                    for fut in as_completed(fut_map):
+                        wav = fut_map[fut]
+                        if self.cancelled:
+                            break
+                        try:
+                            err = fut.result()
+                        except Exception as e:
+                            err = str(e)
+                        if err:
+                            self.file_error.emit(wav, err)
+                        else:
+                            self.file_done.emit(wav)
+                        processed.add(wav)
+                parallel_executed = True
             except Exception as e:
-                self.file_error.emit(wav, str(e))
+                logging.warning("Multiprocessing failed (%s). Falling back to threads.", e)
+                try:
+                    with ThreadPoolExecutor(max_workers=self.cfg.num_workers) as ex:
+                        fut_map = {ex.submit(thread_transcribe_and_export, t): t["wav"] for t in tasks}
+                        for fut in as_completed(fut_map):
+                            wav = fut_map[fut]
+                            if self.cancelled:
+                                break
+                            try:
+                                err = fut.result()
+                            except Exception as e2:
+                                err = str(e2)
+                            if err:
+                                self.file_error.emit(wav, err)
+                            else:
+                                self.file_done.emit(wav)
+                            processed.add(wav)
+                    parallel_executed = True
+                except Exception as e2:
+                    logging.warning("Thread pool failed (%s). Falling back to sequential.", e2)
+
+        # If not using parallel (GPU or single worker) OR pools failed → sequential for remaining files
+        if (not use_parallel) or (use_parallel and not parallel_executed):
+            for wav in self.files:
+                if wav in processed:
+                    continue
+                if self.cancelled:
+                    break
+                try:
+                    # Reuse the threaded worker task to run sequentially in this thread
+                    task = {
+                        "wav": wav,
+                        "model_name": self.model_name,
+                        "device_mode": self.cfg.device_mode,
+                        "language_hint": self.cfg.language_hint,
+                        "word_timestamps": self.cfg.word_timestamps,
+                        "num_workers": self.cfg.num_workers,
+                        "output_dir": (self.cfg.output_dir or "").strip(),
+                        "output_formats": list(self.cfg.output_formats or ["txt"]),
+                        "diarization_engine": self.cfg.diarization_engine,
+                        "diarization_max_speakers": int(self.cfg.diarization_max_speakers),
+                    }
+                    err = thread_transcribe_and_export(task)
+                    if err:
+                        self.file_error.emit(wav, err)
+                    else:
+                        self.file_done.emit(wav)
+                except Exception as e:
+                    self.file_error.emit(wav, str(e))
+
+        self.all_done.emit()
+                        out_dir = os.path.dirname(os.path.abspath(wav))
+
+                    # Build filename: YYYYMMDD_HHMM_originalName_modelName.ext
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+                    original_name = os.path.splitext(os.path.basename(wav))[0]
+                    model_short = self.model_name.replace("whisper-", "").replace("-ct2", "")
+                    base_name = f"{timestamp}_{original_name}_{model_short}"
+
+                    out_txt = os.path.join(out_dir, base_name + ".txt")
+                    out_docx = os.path.join(out_dir, base_name + ".docx")
+                    if "txt" in self.cfg.output_formats:
+                        export_txt(out_txt, segs, speaker_map, include_speakers=include_speakers)
+                    if "docx" in self.cfg.output_formats:
+                        export_docx(out_docx, segs, speaker_map, include_speakers=include_speakers)
+
+                    self.file_done.emit(wav)
+                except Exception as e:
+                    self.file_error.emit(wav, str(e))
         self.all_done.emit()
 
 
@@ -458,6 +523,15 @@ class MainWindow(QWidget):
         except Exception:
             pass
         self.progress_label.setText(f"✅ Completed: {os.path.basename(wav)}")
+        # Update overall progress when running multiple files
+        try:
+            if self.total_files > 0:
+                pct = int(100 * (self.completed_count + self.error_count) / self.total_files)
+                self.progress_bar.setRange(0, 100)
+                self.progress_bar.setValue(min(max(pct, 1), 99))
+                self.progress_bar.setVisible(pct < 100)
+        except Exception:
+            pass
 
     def on_file_error(self, wav, err):
         logging.error("Error on %s: %s", wav, err)
@@ -469,6 +543,15 @@ class MainWindow(QWidget):
         except Exception:
             pass
         self.progress_label.setText(f"❌ Error on {os.path.basename(wav)}: {err}")
+        # Update overall progress when running multiple files
+        try:
+            if self.total_files > 0:
+                pct = int(100 * (self.completed_count + self.error_count) / self.total_files)
+                self.progress_bar.setRange(0, 100)
+                self.progress_bar.setValue(min(max(pct, 1), 99))
+                self.progress_bar.setVisible(pct < 100)
+        except Exception:
+            pass
 
     def on_all_done(self):
         self.btn_transcribe.setEnabled(True)
