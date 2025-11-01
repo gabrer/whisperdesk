@@ -3,12 +3,15 @@ import sys
 import logging
 from typing import List
 
-from PySide6.QtCore import QThread, Signal, QUrl
-from PySide6.QtGui import QStandardItemModel, QStandardItem, QDesktopServices
+from PySide6.QtCore import QThread, Signal, QUrl, Qt
+from PySide6.QtGui import (
+    QStandardItemModel, QStandardItem, QDesktopServices,
+    QGuiApplication, QFont, QPalette, QColor
+)
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QFileDialog,
     QHBoxLayout, QListWidget, QListWidgetItem, QComboBox, QCheckBox, QTabWidget,
-    QFormLayout, QLineEdit, QAbstractItemView, QProgressBar
+    QFormLayout, QLineEdit, QAbstractItemView, QProgressBar, QFrame
 )
 
 from utils import setup_logging, models_root, app_root
@@ -218,11 +221,14 @@ class MainWindow(QWidget):
         v.addWidget(self.file_list, 1)
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         self.btn_add_files = QPushButton("Add WAV files…")
         self.btn_add_folder = QPushButton("Add folder…")
         self.btn_remove = QPushButton("Remove")
+        self.btn_remove.setObjectName("btn_remove")
         self.btn_remove.setToolTip("Remove selected file(s) from the list")
         self.btn_clear = QPushButton("Clear")
+        self.btn_clear.setObjectName("btn_clear")
         btn_row.addWidget(self.btn_add_files)
         btn_row.addWidget(self.btn_add_folder)
         btn_row.addWidget(self.btn_remove)
@@ -231,6 +237,7 @@ class MainWindow(QWidget):
 
         # Model + outputs row
         controls = QHBoxLayout()
+        controls.setSpacing(8)
 
         controls.addWidget(QLabel("Model:"))
         self.model_combo = QComboBox()
@@ -259,9 +266,11 @@ class MainWindow(QWidget):
         controls.addWidget(self.chk_docx)
 
         self.btn_transcribe = QPushButton("Transcribe")
+        self.btn_transcribe.setObjectName("btn_transcribe")
         controls.addWidget(self.btn_transcribe)
 
         self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setObjectName("btn_stop")
         self.btn_stop.setEnabled(False)
         self.btn_stop.setToolTip("Stop all processing immediately")
         controls.addWidget(self.btn_stop)
@@ -820,13 +829,388 @@ class MainWindow(QWidget):
 
 
 def main():
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(True)  # Ensure app quits when main window closes
-    w = MainWindow()
-    w.show()
-    exit_code = app.exec()
+    """Entry point for the WhisperDesk application."""
+    setup_logging()
 
-    # Additional cleanup on exit
+    # Enable HiDPI support for sharp rendering on high-resolution displays
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
+
+    app = QApplication(sys.argv)
+
+    # Use Fusion style for consistent cross-platform appearance
+    app.setStyle("Fusion")
+
+    # Set professional color palette
+    palette = QPalette()
+    # Light mode palette suitable for professional/academic environments
+    palette.setColor(QPalette.ColorRole.Window, QColor(248, 249, 250))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(33, 37, 41))
+    palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(248, 249, 250))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(33, 37, 41))
+    palette.setColor(QPalette.ColorRole.Text, QColor(33, 37, 41))
+    palette.setColor(QPalette.ColorRole.Button, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(33, 37, 41))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(220, 53, 69))
+    palette.setColor(QPalette.ColorRole.Link, QColor(13, 110, 253))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(13, 110, 253))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+    app.setPalette(palette)
+
+    # Set professional font - use system default
+    font = QFont()
+    font.setPointSize(10)
+    app.setFont(font)
+
+    # Apply modern stylesheet
+    stylesheet = """
+        /* Global Styles */
+        * {
+            font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+            font-size: 13px;
+        }
+
+        /* Main Window */
+        QWidget {
+            background-color: #f5f5f5;
+            color: #2c3e50;
+        }
+
+        /* Tab Widget */
+        QTabWidget::pane {
+            border: 1px solid #d0d0d0;
+            border-radius: 4px;
+            background-color: white;
+            padding: 16px;
+        }
+
+        QTabBar::tab {
+            background-color: #e8e8e8;
+            color: #5a6c7d;
+            padding: 8px 16px;
+            margin-right: 2px;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            font-weight: 500;
+            border: 1px solid #d0d0d0;
+            border-bottom: none;
+        }
+
+        QTabBar::tab:selected {
+            background-color: white;
+            color: #2c3e50;
+            border-bottom: 2px solid white;
+        }
+
+        QTabBar::tab:hover:!selected {
+            background-color: #f0f0f0;
+        }
+
+        /* Buttons */
+        QPushButton {
+            background-color: #e9ecef;
+            color: #495057;
+            border: 1px solid #ced4da;
+            padding: 6px 14px;
+            border-radius: 4px;
+            font-weight: 500;
+            min-height: 28px;
+            font-size: 13px;
+        }
+
+        QPushButton:hover {
+            background-color: #dee2e6;
+            border-color: #adb5bd;
+        }
+
+        QPushButton:pressed {
+            background-color: #ced4da;
+        }
+
+        QPushButton:disabled {
+            background-color: #f8f9fa;
+            color: #adb5bd;
+            border-color: #dee2e6;
+        }        color: #adb5bd;
+            border-color: #dee2e6;
+        }
+
+        QPushButton#btn_stop {
+            background-color: #f8d7da;
+            color: #721c24;
+            border-color: #f5c6cb;
+        }
+
+        QPushButton#btn_stop:hover {
+            background-color: #f1b0b7;
+            border-color: #e2a1a8;
+        }
+
+        QPushButton#btn_clear, QPushButton#btn_remove {
+            background-color: #e9ecef;
+            color: #6c757d;
+            border-color: #ced4da;
+        }
+
+        QPushButton#btn_clear:hover, QPushButton#btn_remove:hover {
+            background-color: #dee2e6;
+            border-color: #adb5bd;
+        }
+
+        QPushButton#btn_transcribe {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border-color: #bee5eb;
+        }
+
+        QPushButton#btn_transcribe:hover {
+            background-color: #b8daff;
+            border-color: #9fcdff;
+        }
+
+        /* Line Edit */
+        QLineEdit {
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            background-color: white;
+            selection-background-color: #b8daff;
+            color: #2c3e50;
+            min-height: 32px;
+        }
+
+        QLineEdit:focus {
+            border: 1px solid #80bdff;
+            background-color: white;
+        }
+
+        QLineEdit:hover {
+            border-color: #adb5bd;
+        }
+
+        /* Combo Box */
+        QComboBox {
+            padding: 8px 12px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            background-color: white;
+            color: #2c3e50;
+            min-height: 32px;
+        }
+
+        QComboBox:focus {
+            border: 1px solid #80bdff;
+        }
+
+        QComboBox:hover {
+            border-color: #adb5bd;
+        }
+
+        /* Line Edit */
+        QLineEdit {
+            padding: 10px 14px;
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            border-radius: 8px;
+            background-color: rgba(248, 250, 252, 0.5);
+            selection-background-color: rgba(99, 102, 241, 0.2);
+            color: #1e293b;
+            min-height: 36px;
+        }
+
+        QLineEdit:focus {
+            border: 1px solid rgba(99, 102, 241, 0.4);
+            background-color: white;
+        }
+
+        QLineEdit:hover {
+            background-color: white;
+            border-color: rgba(99, 102, 241, 0.2);
+        }
+
+        /* Combo Box */
+        QComboBox {
+            padding: 10px 14px;
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            border-radius: 8px;
+            background-color: rgba(248, 250, 252, 0.5);
+            color: #1e293b;
+            min-height: 36px;
+        }
+
+        QComboBox:focus {
+            border: 1px solid rgba(99, 102, 241, 0.4);
+            background-color: white;
+        }
+
+        QComboBox:hover {
+            background-color: white;
+            border-color: rgba(99, 102, 241, 0.2);
+        }
+
+        QComboBox::drop-down {
+            border: none;
+            padding-right: 8px;
+        }
+
+        QComboBox::down-arrow {
+            image: none;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 6px solid #6c757d;
+            margin-right: 8px;
+        }
+
+        QComboBox QAbstractItemView {
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            background-color: white;
+            selection-background-color: #d1ecf1;
+            selection-color: #2c3e50;
+            padding: 4px;
+        }
+
+        /* List Widget */
+        QListWidget {
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            background-color: white;
+            padding: 8px;
+        }
+
+        QListWidget::item {
+            padding: 8px;
+            border-radius: 4px;
+            margin: 2px 0;
+            color: #2c3e50;
+        }
+
+        QListWidget::item:selected {
+            background-color: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        QListWidget::item:hover:!selected {
+            background-color: #f8f9fa;
+        }
+
+        /* Check Box */
+        QCheckBox {
+            spacing: 8px;
+            padding: 4px;
+            color: #2c3e50;
+        }
+
+        QCheckBox::indicator {
+            width: 18px;
+            height: 18px;
+            border: 1px solid #ced4da;
+            border-radius: 3px;
+            background-color: white;
+        }
+
+        QCheckBox::indicator:hover {
+            border-color: #80bdff;
+        }
+
+        QCheckBox::indicator:checked {
+            background-color: #d1ecf1;
+            border-color: #17a2b8;
+            image: none;
+        }
+
+        /* Progress Bar */
+        QProgressBar {
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            text-align: center;
+            background-color: #e9ecef;
+            height: 24px;
+            color: #495057;
+            font-weight: 500;
+        }
+
+        QProgressBar::chunk {
+            background-color: #17a2b8;
+            border-radius: 3px;
+        }
+
+        /* Labels */
+        QLabel {
+            color: #2c3e50;
+            padding: 2px;
+        }
+
+        QLabel#heading {
+            font-size: 16px;
+            font-weight: 600;
+            color: #2c3e50;
+            padding: 8px 0;
+        }
+
+        QLabel#subheading {
+            font-size: 14px;
+            font-weight: 500;
+            color: #495057;
+            padding: 4px 0;
+        }
+
+        /* Scrollbar */
+        QScrollBar:vertical {
+            border: none;
+            background-color: #f5f5f5;
+            width: 10px;
+            border-radius: 5px;
+        }
+
+        QScrollBar::handle:vertical {
+            background-color: #adb5bd;
+            border-radius: 5px;
+            min-height: 20px;
+        }
+
+        QScrollBar::handle:vertical:hover {
+            background-color: #6c757d;
+        }
+
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0px;
+        }
+
+        QScrollBar:horizontal {
+            border: none;
+            background-color: #f5f5f5;
+            height: 10px;
+            border-radius: 5px;
+        }
+
+        QScrollBar::handle:horizontal {
+            background-color: #adb5bd;
+            border-radius: 5px;
+            min-width: 20px;
+        }
+
+        QScrollBar::handle:horizontal:hover {
+            background-color: #6c757d;
+        }
+
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            width: 0px;
+        }
+    """
+
+    app.setStyleSheet(stylesheet)
+    app.setQuitOnLastWindowClosed(True)
+
+    w = MainWindow()
+    w.setWindowTitle("WhisperDesk - Professional Transcription System")
+    w.setMinimumSize(900, 700)
+    w.show()
+
+    exit_code = app.exec()
     logging.info("Application exiting with code %d", exit_code)
     sys.exit(exit_code)
 
