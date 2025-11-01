@@ -102,10 +102,45 @@ class Transcriber:
                 model_id = local_snapshot_dir
                 os.environ["HF_HUB_OFFLINE"] = "1"
             else:
-                # Fallback to remote id (online)
-                model_id = remote_short
-                # allow online checks
-                os.environ.pop("HF_HUB_OFFLINE", None)
+                # Fallback to remote id (online) — but prefetch via huggingface_hub to avoid internal hangs
+                # Use snapshot_download into our per-user cache with symlinks disabled
+                try:
+                    if progress_callback:
+                        progress_callback("Preparing model download…", 0)
+                    from huggingface_hub import snapshot_download  # type: ignore
+                    cache_dir = hf_cache_root()
+                    # Honor env timeout if set; otherwise default to 60s per request via env set in app.py
+                    # Limit worker threads to 1 to reduce file contention on Windows
+                    snapshot_path = snapshot_download(
+                        repo_id=f"Systran/faster-whisper-{remote_short}",
+                        cache_dir=cache_dir,
+                        local_files_only=False,
+                        allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
+                        max_workers=1,
+                        local_dir_use_symlinks=False,
+                        revision="main",
+                        resume_download=True,
+                    )
+                    # Verify contents and set as model_id
+                    if os.path.isdir(snapshot_path):
+                        if _looks_like_ct2_dir(snapshot_path):
+                            model_id = snapshot_path
+                            os.environ["HF_HUB_OFFLINE"] = "1"  # after prefetch, prefer offline
+                        else:
+                            # Sometimes snapshot_download returns root; find CT2 folder inside
+                            for root, dirs, files in os.walk(snapshot_path):
+                                if _looks_like_ct2_dir(root):
+                                    model_id = root
+                                    os.environ["HF_HUB_OFFLINE"] = "1"
+                                    break
+                    # If still not set, fall back to remote id
+                    if 'model_id' not in locals():
+                        model_id = remote_short
+                        os.environ.pop("HF_HUB_OFFLINE", None)
+                except Exception as prefetch_err:
+                    logging.warning("[ModelInit] snapshot_download failed (%s); falling back to internal downloader", str(prefetch_err))
+                    model_id = remote_short
+                    os.environ.pop("HF_HUB_OFFLINE", None)
 
         # Determine device and compute type
         is_macos = platform.system() == "Darwin"

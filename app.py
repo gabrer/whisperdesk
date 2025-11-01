@@ -989,6 +989,10 @@ def main():
         os.environ['HF_HUB_ENABLE_REQUESTS'] = '1'
         # Disable symlink usage on Windows to avoid permission and AV issues
         os.environ['HF_HUB_DISABLE_SYMLINKS'] = '1'
+        # Timeouts and telemetry
+        os.environ.setdefault('HF_HUB_HTTP_TIMEOUT', '60')
+        os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
+        os.environ['HF_HUB_ENABLE_TQDM'] = '0'
         # Ensure SSL certificate bundle is available to requests/httpx
         try:
             import certifi  # type: ignore
