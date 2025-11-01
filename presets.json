@@ -5,7 +5,7 @@
     "word_timestamps": true,
     "vad_sensitivity": "normal",
     "diarization_max_speakers": 2,
-    "device_mode": "gpu",
+    "device_mode": "cpu",
     "output_formats": [
       "txt",
       "docx"

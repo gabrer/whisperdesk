@@ -28,7 +28,8 @@ def _build_output_paths(wav: str, model_name: str, out_dir_cfg: str) -> Dict[str
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     original_name = os.path.splitext(os.path.basename(wav))[0]
     model_short = model_name.replace("whisper-", "").replace("-ct2", "")
-    base_name = f"{timestamp}_{original_name}_{model_short}"
+    # New naming: [YYYYMMDD_HHMM_modelname_fileName]
+    base_name = f"{timestamp}_{model_short}_{original_name}"
 
     out_txt = os.path.join(out_dir, base_name + ".txt")
     out_docx = os.path.join(out_dir, base_name + ".docx")

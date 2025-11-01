@@ -528,6 +528,15 @@ class MainWindow(QWidget):
         self.error_count = 0
         self._init_failed = False
 
+        # Show ongoing processing state
+        try:
+            self.progress_label.setText(f"Processing… 0/{self.total_files}")
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(1)
+        except Exception:
+            pass
+
         self.worker = Worker(files, self.cfg, model_name)
         self.worker.file_done.connect(self.on_file_done)
         self.worker.file_error.connect(self.on_file_error)
@@ -568,7 +577,11 @@ class MainWindow(QWidget):
             self.completed_count += 1
         except Exception:
             pass
-        self.progress_label.setText(f"✅ Completed: {os.path.basename(wav)}")
+        # Show ongoing processing aggregate instead of per-file "Completed"
+        try:
+            self.progress_label.setText(f"Processing… {self.completed_count + self.error_count}/{self.total_files}")
+        except Exception:
+            pass
         # Update overall progress when running multiple files
         try:
             if self.total_files > 0:
@@ -588,7 +601,11 @@ class MainWindow(QWidget):
                 self._init_failed = True
         except Exception:
             pass
-        self.progress_label.setText(f"❌ Error on {os.path.basename(wav)}: {err}")
+        # Show ongoing processing aggregate with error
+        try:
+            self.progress_label.setText(f"Processing… {self.completed_count + self.error_count}/{self.total_files} — last error: {os.path.basename(wav)}")
+        except Exception:
+            pass
         # Update overall progress when running multiple files
         try:
             if self.total_files > 0:
