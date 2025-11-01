@@ -108,15 +108,43 @@ class Transcriber:
         )
 
         logging.info("Loading model: %s (device=%s, compute_type=%s)", model_id, device, compute_type)
+
         # Use configurable number of workers for CTranslate2 (1 = safest, 2-4 = faster but may conflict)
-        self.model = WhisperModel(
-            model_id,
-            device=device,
-            compute_type=compute_type,
-            num_workers=num_workers,
-            cpu_threads=1 if device == "cpu" else 4,
-            download_root=download_root,
-        )
+        # Try multiple compute types with fallback for GPU compatibility
+        compute_types_to_try = [compute_type]
+
+        # Add fallbacks for GPU mode if float16 fails
+        if device == "cuda" and compute_type == "float16":
+            compute_types_to_try.extend(["int8_float32", "int8_float16", "int8"])
+
+        last_error = None
+        for ct in compute_types_to_try:
+            try:
+                logging.info("Attempting to load model with compute_type=%s", ct)
+                self.model = WhisperModel(
+                    model_id,
+                    device=device,
+                    compute_type=ct,
+                    num_workers=num_workers,
+                    cpu_threads=1 if device == "cpu" else 4,
+                    download_root=download_root,
+                )
+                if ct != compute_type:
+                    logging.warning("Fell back to compute_type=%s (original %s not supported)", ct, compute_type)
+                break  # Success, exit loop
+            except ValueError as e:
+                if "compute type" in str(e).lower():
+                    logging.warning("compute_type=%s not supported, trying fallback...", ct)
+                    last_error = e
+                    continue
+                else:
+                    # Different error, don't retry
+                    raise
+        else:
+            # All compute types failed
+            if last_error:
+                raise last_error
+            raise RuntimeError(f"Failed to load model with any compute type: {compute_types_to_try}")
 
         if progress_callback:
             progress_callback("Model loaded.", 100)
