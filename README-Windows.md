@@ -82,6 +82,16 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -IncludeSpeechBrain
 - If torchaudio import errors occur in SpeechBrain mode, rebuild with `-IncludeSpeechBrain`.
 - If audio resampling fails, install `scipy` (already in requirements.txt).
 
+### Model downloads and cache
+
+- When a model isn't found under `models/`, WhisperDesk will download it to a per-user cache:
+  - `%LOCALAPPDATA%\WhisperDesk\hf-cache` on Windows
+  - `~/Library/Caches/WhisperDesk/hf-cache` on macOS
+  - `~/.cache/WhisperDesk/hf-cache` on Linux
+- This avoids permission issues and antivirus interference in bundled apps.
+- If network downloads are slow or blocked, you can pre-download models on a machine with internet and copy the resulting `models--<org>--<repo>` folder from the cache listed above.
+- For maximum portability (offline), place CT2 model folders like `whisper-small-ct2` directly under `models/` before building.
+
 ## 8) Customization
 
 - Default settings are in `presets.json`.

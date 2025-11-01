@@ -5,6 +5,7 @@ import sys
 import os
 from pathlib import Path
 from typing import Any, Dict
+import platform
 
 
 # Paths
@@ -26,6 +27,37 @@ def models_root() -> str:
 
 def diarization_root() -> str:
     return os.path.join(app_root(), "diarization_models")
+
+
+def hf_cache_root() -> str:
+    r"""Return a per-user, writable cache directory for Hugging Face models.
+
+    Rationale:
+    - In frozen apps (e.g., PyInstaller on Windows), writing into the app folder can fail
+      or be blocked by AV/scanners. Using a user cache dir avoids permission issues.
+    - Mirrors platform conventions:
+      - Windows: %LOCALAPPDATA%\\WhisperDesk\\hf-cache
+      - macOS: ~/Library/Caches/WhisperDesk/hf-cache
+      - Linux: ~/.cache/WhisperDesk/hf-cache
+    """
+    system = platform.system()
+    try:
+        if system == "Windows":
+            base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
+            cache_dir = os.path.join(base, "WhisperDesk", "hf-cache")
+        elif system == "Darwin":  # macOS
+            base = os.path.expanduser("~/Library/Caches")
+            cache_dir = os.path.join(base, "WhisperDesk", "hf-cache")
+        else:  # Linux and others
+            base = os.path.expanduser("~/.cache")
+            cache_dir = os.path.join(base, "WhisperDesk", "hf-cache")
+        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        return cache_dir
+    except Exception:
+        # Fallback to app-local cache if anything goes wrong
+        fallback = os.path.join(app_root(), "hf-cache")
+        Path(fallback).mkdir(parents=True, exist_ok=True)
+        return fallback
 
 
 # Logging

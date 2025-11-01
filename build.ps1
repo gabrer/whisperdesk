@@ -45,7 +45,10 @@ $collectArgs = @(
   '--collect-all', 'ctranslate2',
   '--collect-all', 'onnxruntime',
   '--collect-all', 'sklearn',
-  '--collect-all', 'soundfile'
+  '--collect-all', 'soundfile',
+  '--collect-all', 'huggingface_hub',
+  '--collect-all', 'httpx',
+  '--collect-all', 'certifi'
 )
 if ($IncludeSpeechBrain) {
   $collectArgs += @('--collect-all', 'speechbrain', '--collect-all', 'torch', '--collect-all', 'torchaudio')

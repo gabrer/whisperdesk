@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QLineEdit, QAbstractItemView, QProgressBar, QFrame
 )
 
-from utils import setup_logging, models_root, app_root
+from utils import setup_logging, models_root, app_root, hf_cache_root
 from device import device_banner
 from settings import Settings
 from transcription import Transcriber
@@ -972,6 +972,13 @@ def main():
     # This must be done at app startup, not in worker threads
     os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
     os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '0'
+    # Route HF cache to a per-user, writable location (fixes Windows frozen-app hangs)
+    try:
+        _hf_cache = hf_cache_root()
+        os.environ['HF_HOME'] = _hf_cache
+        os.environ['HUGGINGFACE_HUB_CACHE'] = _hf_cache
+    except Exception:
+        pass
 
     # CRITICAL FIX for Windows PyInstaller builds:
     # Force httpx to use HTTP/1.1 instead of HTTP/2 which causes hangs on Windows
@@ -980,6 +987,16 @@ def main():
         os.environ['HTTPX_DISABLE_HTTP2'] = '1'
         # Use requests library instead of httpx for downloads (more compatible with PyInstaller)
         os.environ['HF_HUB_ENABLE_REQUESTS'] = '1'
+        # Disable symlink usage on Windows to avoid permission and AV issues
+        os.environ['HF_HUB_DISABLE_SYMLINKS'] = '1'
+        # Ensure SSL certificate bundle is available to requests/httpx
+        try:
+            import certifi  # type: ignore
+            ca_file = certifi.where()
+            os.environ['SSL_CERT_FILE'] = ca_file
+            os.environ['REQUESTS_CA_BUNDLE'] = ca_file
+        except Exception:
+            pass
 
     setup_logging()    # Enable HiDPI support for sharp rendering on high-resolution displays
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(

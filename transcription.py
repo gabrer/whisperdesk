@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional, TypedDict, Callable
 # ...existing code...
 # Remove the top-level import to avoid failing during module import
 # from faster_whisper import WhisperModel
-from utils import models_root
+from utils import models_root, hf_cache_root
 
 class Word(TypedDict):
     start: float
@@ -69,26 +69,32 @@ class Transcriber:
             model_id = self.model_dir
             os.environ["HF_HUB_OFFLINE"] = "1"  # enforce offline usage
         else:
-            # Try 2: locate HF snapshot in our models/ cache and use it offline
+            # Try 2: locate HF snapshot in our models/ cache OR user HF cache and use it offline
             remote_short = to_remote_name(model_name)  # e.g., 'small', 'large-v2'
             org = "Systran"
             repo = f"faster-whisper-{remote_short}"
             cache_dir_name = f"models--{org}--{repo}"
-            cache_root = os.path.join(models_root(), cache_dir_name, "snapshots")
+            candidate_roots = [
+                os.path.join(models_root(), cache_dir_name, "snapshots"),
+                os.path.join(hf_cache_root(), cache_dir_name, "snapshots"),
+            ]
             local_snapshot_dir = None
             try:
-                if os.path.isdir(cache_root):
-                    # Pick the most recent snapshot folder that contains required files
-                    candidates = [
-                        os.path.join(cache_root, d) for d in os.listdir(cache_root)
-                        if os.path.isdir(os.path.join(cache_root, d))
-                    ]
-                    # Sort by modification time, newest first
-                    candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-                    for cand in candidates:
-                        if _looks_like_ct2_dir(cand):
-                            local_snapshot_dir = cand
-                            break
+                for cache_root in candidate_roots:
+                    if os.path.isdir(cache_root):
+                        # Pick the most recent snapshot folder that contains required files
+                        candidates = [
+                            os.path.join(cache_root, d) for d in os.listdir(cache_root)
+                            if os.path.isdir(os.path.join(cache_root, d))
+                        ]
+                        # Sort by modification time, newest first
+                        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                        for cand in candidates:
+                            if _looks_like_ct2_dir(cand):
+                                local_snapshot_dir = cand
+                                break
+                    if local_snapshot_dir:
+                        break
             except Exception:
                 local_snapshot_dir = None
 
@@ -260,9 +266,8 @@ class Transcriber:
             else:
                 logging.info("[ModelInit] Using local model, no download needed: %s", model_id)
 
-        # Force faster-whisper/HF Hub to download models to our local models/ folder
-        # Set download_root to ensure models are stored in models/ instead of user cache
-        download_root = models_root()
+        # Direct faster-whisper/HF Hub downloads to a per-user cache folder
+        download_root = hf_cache_root()
         os.makedirs(download_root, exist_ok=True)
         # Also direct Hugging Face caches to the same folder for consistency
         os.environ["HF_HOME"] = download_root
