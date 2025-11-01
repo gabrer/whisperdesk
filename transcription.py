@@ -200,8 +200,18 @@ class Transcriber:
                                     speed_str = f" ({speed_bps / 1024:.1f} KB/s)"
                                 else:
                                     speed_str = f" ({speed_bps:.0f} B/s)"
+                            else:
+                                # No speed yet, show animated dots
+                                logging.debug("[DownloadProgress] No valid speed calculation, using dots")
+                                dots = "." * ((download_progress_counter[0] % 4))
+                                spaces = " " * (3 - len(dots))
+                                speed_str = f"{dots}{spaces}"
                         else:
-                            logging.debug("[DownloadProgress] First iteration, no speed yet")
+                            logging.debug("[DownloadProgress] First iteration, initializing tracking")
+                            # First iteration - show animated dots while initializing
+                            dots = "." * ((download_progress_counter[0] % 4))
+                            spaces = " " * (3 - len(dots))
+                            speed_str = f"{dots}{spaces}"
 
                         # Update tracking variables
                         download_last_size[0] = total_size
@@ -222,7 +232,10 @@ class Transcriber:
                 if progress_callback:
                     msg = f"Downloading model{speed_str}"
                     logging.debug("[DownloadProgress] Calling progress_callback with: %s", msg)
-                    progress_callback(msg, 10 + (download_progress_counter[0] % 30))
+                    try:
+                        progress_callback(msg, 10 + (download_progress_counter[0] % 30))
+                    except Exception as cb_err:
+                        logging.warning("[DownloadProgress] progress_callback failed: %s", str(cb_err))
 
                 # Schedule next update
                 import threading
