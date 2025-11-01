@@ -233,7 +233,9 @@ class Transcriber:
                     msg = f"Downloading model{speed_str}"
                     logging.debug("[DownloadProgress] Calling progress_callback with: %s", msg)
                     try:
-                        progress_callback(msg, 10 + (download_progress_counter[0] % 30))
+                        # Use a fixed progress value instead of cycling to avoid false sense of progress
+                        # We don't know the actual download progress, so just indicate activity
+                        progress_callback(msg, 15)
                     except Exception as cb_err:
                         logging.warning("[DownloadProgress] progress_callback failed: %s", str(cb_err))
 
@@ -276,6 +278,13 @@ class Transcriber:
         )
 
         logging.info("Loading model: %s (device=%s, compute_type=%s)", model_id, device, compute_type)
+        logging.info("[ModelInit] ============ BEGINNING MODEL LOAD ============")
+        logging.info("[ModelInit] System: %s", platform.system())
+        logging.info("[ModelInit] Model ID: %s", model_id)
+        logging.info("[ModelInit] Device: %s", device)
+        logging.info("[ModelInit] Compute Type: %s", compute_type)
+        logging.info("[ModelInit] Num Workers: %d", num_workers)
+        logging.info("[ModelInit] Download Root: %s", download_root)
 
         # Track actual device/compute_type used after initialization
         self.active_device = device
@@ -288,15 +297,20 @@ class Transcriber:
         # Add fallbacks for GPU mode if float16 fails
         if device == "cuda" and compute_type == "float16":
             compute_types_to_try.extend(["int8_float32", "int8_float16", "int8"])
+            logging.info("[ModelInit] GPU mode - will try compute types: %s", compute_types_to_try)
 
         last_error = None
         loaded = False
+        logging.info("[ModelInit] Starting model initialization (CUDA=%s)", device == "cuda")
         if device == "cuda":
+            logging.info("[ModelInit] Entering GPU initialization loop")
             for ct in compute_types_to_try:
                 try:
+                    logging.info("[ModelInit] -------- Attempting GPU model load --------")
                     logging.info("[ModelInit] Attempting to load GPU model with compute_type=%s", ct)
                     logging.info("[ModelInit] WhisperModel params: model_id=%s, device=%s, compute_type=%s, num_workers=%d, cpu_threads=%d, download_root=%s",
                                 model_id, device, ct, num_workers, 1 if device == "cpu" else 4, download_root)
+                    logging.info("[ModelInit] About to call WhisperModel() constructor...")
                     self.model = WhisperModel(
                         model_id,
                         device=device,
@@ -305,25 +319,35 @@ class Transcriber:
                         cpu_threads=1 if device == "cpu" else 4,
                         download_root=download_root,
                     )
+                    logging.info("[ModelInit] WhisperModel() constructor returned successfully")
                     logging.info("[ModelInit] WhisperModel successfully loaded with compute_type=%s", ct)
                     if ct != compute_type:
                         logging.warning("Fell back to compute_type=%s (original %s not supported)", ct, compute_type)
                     loaded = True
                     self.active_device = device
                     self.active_compute_type = ct
+                    logging.info("[ModelInit] GPU model loaded successfully, breaking loop")
                     break  # Success, exit loop
                 except ValueError as e:
+                    logging.error("[ModelInit] ValueError during GPU model load: %s", str(e))
                     if "compute type" in str(e).lower():
                         logging.warning("compute_type=%s not supported on GPU, trying fallback...", ct)
                         last_error = e
                         continue
                     else:
                         # Different error on GPU, record and break to CPU fallback
+                        logging.error("[ModelInit] Non-compute-type ValueError on GPU, will try CPU fallback")
                         last_error = e
                         break
+                except Exception as e:
+                    logging.error("[ModelInit] Unexpected exception during GPU model load: %s", str(e), exc_info=True)
+                    last_error = e
+                    break
 
+            logging.info("[ModelInit] GPU initialization loop complete (loaded=%s)", loaded)
             if not loaded:
                 # Attempt CPU fallback
+                logging.info("[ModelInit] -------- Attempting CPU fallback --------")
                 cpu_ct = "int8" if (is_macos or is_windows) else "int8_float16"
                 logging.warning(
                     "GPU initialization failed (%s). Falling back to CPU with compute_type=%s.",
@@ -335,6 +359,7 @@ class Transcriber:
                 logging.info("[ModelInit] Attempting CPU fallback with compute_type=%s", cpu_ct)
                 logging.info("[ModelInit] WhisperModel params: model_id=%s, device=cpu, compute_type=%s, num_workers=%d, cpu_threads=1, download_root=%s",
                             model_id, cpu_ct, num_workers, download_root)
+                logging.info("[ModelInit] About to call WhisperModel() constructor (CPU fallback)...")
                 self.model = WhisperModel(
                     model_id,
                     device="cpu",
@@ -343,15 +368,18 @@ class Transcriber:
                     cpu_threads=1,
                     download_root=download_root,
                 )
+                logging.info("[ModelInit] WhisperModel() constructor returned (CPU fallback)")
                 loaded = True
                 logging.info("[ModelInit] CPU fallback succeeded (compute_type=%s)", cpu_ct)
                 self.active_device = "cpu"
                 self.active_compute_type = cpu_ct
         else:
             # Non-GPU path: just load with the chosen CPU compute type
+            logging.info("[ModelInit] -------- Direct CPU model load (non-GPU path) --------")
             logging.info("[ModelInit] Loading CPU model directly with compute_type=%s", compute_type)
             logging.info("[ModelInit] WhisperModel params: model_id=%s, device=%s, compute_type=%s, num_workers=%d, cpu_threads=1, download_root=%s",
                         model_id, device, compute_type, num_workers, download_root)
+            logging.info("[ModelInit] About to call WhisperModel() constructor (direct CPU)...")
             self.model = WhisperModel(
                 model_id,
                 device=device,
@@ -360,26 +388,38 @@ class Transcriber:
                 cpu_threads=1,
                 download_root=download_root,
             )
+            logging.info("[ModelInit] WhisperModel() constructor returned (direct CPU)")
             logging.info("[ModelInit] CPU model successfully loaded")
             self.active_device = device
             self.active_compute_type = compute_type
+            logging.info("[ModelInit] CPU model initialization complete")
 
         # Stop download progress timer if it was started
+        logging.info("[ModelInit] ============ MODEL LOAD COMPLETE ============")
         logging.info("[ModelInit] Stopping download progress timer (active=%s, timer=%s)", download_progress_active, download_timer is not None)
         download_progress_active = False
         if download_timer:
             try:
+                logging.info("[ModelInit] Cancelling download timer...")
                 download_timer.cancel()
                 logging.info("[ModelInit] Download timer cancelled successfully")
             except Exception as timer_err:
                 logging.warning("[ModelInit] Failed to cancel download timer: %s", str(timer_err))
+        else:
+            logging.info("[ModelInit] No download timer to cancel")
 
         if progress_callback:
-            logging.info("[ModelInit] Model initialization complete, calling progress_callback")
+            logging.info("[ModelInit] Model initialization complete, calling progress_callback with 'Model loaded.'")
             progress_callback("Model loaded.", 100)
+        else:
+            logging.info("[ModelInit] No progress_callback provided")
 
+        logging.info("[ModelInit] Setting language=%s, word_timestamps=%s", language_hint, word_timestamps)
+
+        logging.info("[ModelInit] Setting language=%s, word_timestamps=%s", language_hint, word_timestamps)
         self.language = language_hint
         self.word_timestamps = word_timestamps
+        logging.info("[ModelInit] ============ TRANSCRIBER INIT COMPLETE ============")
 
     def transcribe(self, wav_path: str) -> Dict[str, Any]:
         # ...existing code...
