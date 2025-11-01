@@ -212,6 +212,11 @@ class MainWindow(QWidget):
         self.btn_open_logs.clicked.connect(self.open_logs)
 
         self.worker = None
+        # Counters for result summary
+        self.total_files = 0
+        self.completed_count = 0
+        self.error_count = 0
+        self._init_failed = False
 
     def _available_models(self) -> List[str]:
         root = models_root()
@@ -396,6 +401,12 @@ class MainWindow(QWidget):
         self.btn_transcribe.setEnabled(False)
         self.btn_cancel.setEnabled(True)
 
+        # Reset counters
+        self.total_files = len(files)
+        self.completed_count = 0
+        self.error_count = 0
+        self._init_failed = False
+
         self.worker = Worker(files, self.cfg, model_name)
         self.worker.file_done.connect(self.on_file_done)
         self.worker.file_error.connect(self.on_file_error)
@@ -427,16 +438,39 @@ class MainWindow(QWidget):
 
     def on_file_done(self, wav):
         logging.info("Done: %s", wav)
+        # Count success
+        try:
+            self.completed_count += 1
+        except Exception:
+            pass
         self.progress_label.setText(f"✅ Completed: {os.path.basename(wav)}")
 
     def on_file_error(self, wav, err):
         logging.error("Error on %s: %s", wav, err)
+        # Count failure; also mark init failure specially
+        try:
+            self.error_count += 1
+            if str(wav) == "<init>":
+                self._init_failed = True
+        except Exception:
+            pass
         self.progress_label.setText(f"❌ Error on {os.path.basename(wav)}: {err}")
 
     def on_all_done(self):
         self.btn_transcribe.setEnabled(True)
         self.btn_cancel.setEnabled(False)
-        self.progress_label.setText("✅ All transcriptions completed successfully!")
+        # Summarize results with guidance to check logs when needed
+        if self._init_failed:
+            self.progress_label.setText("❌ Failed to initialize the model. No transcriptions were created. Please check the logs (use the 'Open Logs' button).")
+        elif self.error_count == 0 and self.completed_count == self.total_files and self.total_files > 0:
+            self.progress_label.setText("✅ All transcriptions completed successfully!")
+        elif self.total_files > 0:
+            self.progress_label.setText(
+                f"⚠️ Completed {self.completed_count} of {self.total_files}. {self.error_count} failed. Please check the logs (use the 'Open Logs' button)."
+            )
+        else:
+            # No files scenario shouldn't normally reach here, but keep a safe default
+            self.progress_label.setText("ℹ️ No files were processed.")
         self.progress_bar.setVisible(False)
 
 
