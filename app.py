@@ -266,6 +266,11 @@ class MainWindow(QWidget):
         self.btn_stop.setToolTip("Stop all processing immediately")
         controls.addWidget(self.btn_stop)
 
+        # Open output folder button
+        self.btn_open_output = QPushButton("Open Output")
+        self.btn_open_output.setToolTip("Open the output folder where transcriptions are saved")
+        controls.addWidget(self.btn_open_output)
+
         # Open logs button
         self.btn_open_logs = QPushButton("Open Logs")
         self.btn_open_logs.setToolTip("Open the log folder in your file browser")
@@ -293,6 +298,7 @@ class MainWindow(QWidget):
         self.btn_clear.clicked.connect(self.file_list.clear)
         self.btn_transcribe.clicked.connect(self.start_transcription)
         self.btn_stop.clicked.connect(self.stop_transcription)
+        self.btn_open_output.clicked.connect(self.open_output_folder)
         self.btn_open_logs.clicked.connect(self.open_logs)
 
         self.worker = None
@@ -683,6 +689,32 @@ class MainWindow(QWidget):
             self.worker.cancelled = True
             self.progress_label.setText("⚠️ Stopping… please wait for current file to finish.")
             logging.info("User requested stop.")
+
+    def open_output_folder(self):
+        """Open the output folder where transcriptions are saved."""
+        try:
+            output_dir = self.output_dir_edit.text().strip()
+            if not output_dir:
+                # If no output dir configured, use the first file's directory or app root
+                if self.file_list.count() > 0:
+                    first_file = self.file_list.item(0).text()
+                    output_dir = os.path.dirname(os.path.abspath(first_file))
+                else:
+                    output_dir = app_root()
+            else:
+                # Make absolute if relative
+                if not os.path.isabs(output_dir):
+                    output_dir = os.path.abspath(output_dir)
+
+            # Create directory if it doesn't exist
+            if not os.path.isdir(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+
+            # Use Qt to open folder cross-platform
+            QDesktopServices.openUrl(QUrl.fromLocalFile(output_dir))
+        except Exception as e:
+            logging.error("Failed to open output folder: %s", e)
+            self.progress_label.setText(f"⚠️ Could not open output folder: {str(e)}")
 
     def open_logs(self):
         try:
