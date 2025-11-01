@@ -23,6 +23,18 @@ from parallel_exec import mp_initializer, mp_transcribe_and_export, thread_trans
 
 class Worker(QThread):
     file_done = Signal(str)
+    file_error = Signal(str, str)
+    all_done = Signal()
+    progress_update = Signal(str, int)  # (message, percentage 0-100)
+    device_info = Signal(str)  # e.g., "cpu (int8)" or "cuda (float16)"
+
+    def __init__(self, files: List[str], cfg: Settings, model_name: str, parent=None):
+        super().__init__(parent)
+        self.files = files
+        self.cfg = cfg
+        self.model_name = model_name
+        self.cancelled = False
+
     def run(self):
         def on_progress(msg: str, pct: int):
             self.progress_update.emit(msg, pct)
@@ -165,26 +177,6 @@ class Worker(QThread):
                     self.file_error.emit(wav, str(e))
 
         self.all_done.emit()
-                        out_dir = os.path.dirname(os.path.abspath(wav))
-
-                    # Build filename: YYYYMMDD_HHMM_originalName_modelName.ext
-                    from datetime import datetime
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-                    original_name = os.path.splitext(os.path.basename(wav))[0]
-                    model_short = self.model_name.replace("whisper-", "").replace("-ct2", "")
-                    base_name = f"{timestamp}_{original_name}_{model_short}"
-
-                    out_txt = os.path.join(out_dir, base_name + ".txt")
-                    out_docx = os.path.join(out_dir, base_name + ".docx")
-                    if "txt" in self.cfg.output_formats:
-                        export_txt(out_txt, segs, speaker_map, include_speakers=include_speakers)
-                    if "docx" in self.cfg.output_formats:
-                        export_docx(out_docx, segs, speaker_map, include_speakers=include_speakers)
-
-                    self.file_done.emit(wav)
-                except Exception as e:
-                    self.file_error.emit(wav, str(e))
-        self.all_done.emit()
 
 
 class MainWindow(QWidget):
@@ -277,6 +269,13 @@ class MainWindow(QWidget):
         tabs.addTab(self._build_easy_tab(), "Easy")
         tabs.addTab(self._build_advanced_tab(), "Advanced")
         v.addWidget(tabs)
+        # Keep the parallel mode hint up-to-date as user changes device/workers
+        try:
+            self.device_combo.currentTextChanged.connect(self._update_parallel_hint)
+            self.num_workers_combo.currentIndexChanged.connect(self._update_parallel_hint)
+            self._update_parallel_hint()
+        except Exception:
+            pass
 
         # Signals
         self.btn_add_files.clicked.connect(self.add_files)
@@ -370,6 +369,17 @@ class MainWindow(QWidget):
         self._rebuild_model_combo()
         self._on_model_changed(text)
 
+    def _update_parallel_hint(self):
+        try:
+            dev = self.device_combo.currentText().strip().lower()
+            workers_text = self.num_workers_combo.currentText().strip()
+            workers = int(workers_text.split()[0]) if workers_text else 1
+            enabled = (dev == "cpu" and workers > 1)
+            self.parallel_hint.setText("Parallel mode (CPU)" if enabled else "Disabled")
+        except Exception:
+            # Best-effort; ignore errors
+            pass
+
     def _build_easy_tab(self):
         w = QWidget()
         f = QFormLayout(w)
@@ -415,6 +425,9 @@ class MainWindow(QWidget):
         self.num_workers_combo.setCurrentIndex(self.cfg.num_workers - 1)
         self.num_workers_combo.setToolTip("Number of parallel CTranslate2 workers. 1 is safest; higher values may be faster but can conflict with Qt on some systems.")
         f.addRow("Worker threads:", self.num_workers_combo)
+        # Parallel mode hint (visible when device=cpu and workers>1)
+        self.parallel_hint = QLabel("Disabled")
+        f.addRow("Parallel:", self.parallel_hint)
         return w
 
     def add_files(self):
@@ -472,6 +485,39 @@ class MainWindow(QWidget):
         model_dir = os.path.join(models_root(), model_name)
         if not os.path.isdir(model_dir):
             self.progress_label.setText(f"ℹ️ Model '{model_name}' will be downloaded automatically on first use.")
+
+        # Cap workers for very large models and warn if memory appears low
+        try:
+            model_lower = model_name.lower()
+            # Heuristic cap for large models
+            if "large" in model_lower and self.cfg.num_workers > 2:
+                self.cfg.num_workers = 2
+                try:
+                    self.num_workers_combo.setCurrentIndex(self.cfg.num_workers - 1)
+                except Exception:
+                    pass
+                self.progress_label.setText("ℹ️ Capping workers to 2 for large models to avoid memory pressure.")
+            # Best-effort low-memory detection (psutil optional)
+            try:
+                import psutil  # type: ignore
+                avail_gb = psutil.virtual_memory().available / (1024 ** 3)
+                if avail_gb < 8 and self.cfg.num_workers > 1:
+                    self.cfg.num_workers = 1
+                    try:
+                        self.num_workers_combo.setCurrentIndex(self.cfg.num_workers - 1)
+                    except Exception:
+                        pass
+                    self.progress_label.setText("ℹ️ Low memory detected (<8 GB available). Using single worker to improve stability.")
+            except Exception:
+                # psutil not present or check failed; ignore
+                pass
+            # Update the Advanced tab hint label
+            try:
+                self._update_parallel_hint()
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         self.btn_transcribe.setEnabled(False)
         self.btn_cancel.setEnabled(True)
