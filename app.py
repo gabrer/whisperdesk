@@ -44,16 +44,8 @@ class Worker(QThread):
 
         try:
             on_progress("Initializing model (this may download files if needed)...", 0)
-            # Set environment variables to avoid OpenMP conflicts with Qt
+            # Set environment variable to avoid OpenMP conflicts with Qt
             os.environ['OMP_NUM_THREADS'] = '1'
-
-            # Fix HuggingFace download issues on Windows
-            # Disable Xet storage which can cause hangs
-            os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
-            os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '0'
-
-            # Set download timeout (in seconds) to prevent infinite hangs
-            os.environ['HF_HUB_DOWNLOAD_TIMEOUT'] = '300'  # 5 minutes timeout
 
             tr = Transcriber(
                 model_name=self.model_name,
@@ -751,9 +743,10 @@ class MainWindow(QWidget):
         model_dir = os.path.join(models_root(), model_name)
         if not os.path.isdir(model_dir):
             self.progress_label.setText(
-                f"ℹ️ Model '{model_name}' will be downloaded on first use. "
-                f"This may take several minutes depending on your connection. "
-                f"If download hangs, manually place model files in: {models_root()}"
+                f"⚠️ Model '{model_name}' not found locally. "
+                f"Auto-download may hang on Windows. "
+                f"Please manually download to: {models_root()} "
+                f"or use an already downloaded model."
             )
 
         # Cap workers for very large models and warn if memory appears low
@@ -942,6 +935,12 @@ class MainWindow(QWidget):
 
 def main():
     """Entry point for the WhisperDesk application."""
+    # Set HuggingFace environment variables BEFORE any imports that might use them
+    # This must be done at app startup, not in worker threads
+    os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
+    os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '0'
+    os.environ['HF_HUB_DOWNLOAD_TIMEOUT'] = '300'  # 5 minutes timeout
+
     setup_logging()
 
     # Enable HiDPI support for sharp rendering on high-resolution displays
