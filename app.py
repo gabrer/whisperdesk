@@ -308,6 +308,24 @@ class MainWindow(QWidget):
         self.error_count = 0
         self._init_failed = False
 
+    def closeEvent(self, event):
+        """Handle window close event - ensure all threads are properly terminated."""
+        # Stop the worker thread if it's running
+        if self.worker and self.worker.isRunning():
+            logging.info("Application closing - stopping worker thread...")
+            self.worker.cancelled = True
+            # Give the worker a moment to finish current file
+            self.worker.wait(3000)  # Wait up to 3 seconds
+            if self.worker.isRunning():
+                # Force terminate if still running after timeout
+                logging.warning("Worker thread did not stop gracefully, terminating...")
+                self.worker.terminate()
+                self.worker.wait(1000)  # Wait for termination
+
+        # Accept the close event
+        event.accept()
+        logging.info("Application closed.")
+
     def _available_models(self) -> List[str]:
         root = models_root()
         known = [
@@ -803,9 +821,14 @@ class MainWindow(QWidget):
 
 def main():
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(True)  # Ensure app quits when main window closes
     w = MainWindow()
     w.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+
+    # Additional cleanup on exit
+    logging.info("Application exiting with code %d", exit_code)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
