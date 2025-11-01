@@ -69,6 +69,9 @@ class Worker(QThread):
             self.all_done.emit()
             return
 
+        # Show that processing is starting
+        on_progress(f"Processing {len(self.files)} file(s)...", 1)
+
         processed = set()
         parallel_executed = False
 
@@ -155,6 +158,8 @@ class Worker(QThread):
                 if self.cancelled:
                     break
                 try:
+                    # Show which file is being processed
+                    on_progress(f"Processing: {os.path.basename(wav)}...", 0)
                     # Reuse the threaded worker task to run sequentially in this thread
                     task = {
                         "wav": wav,
@@ -253,9 +258,10 @@ class MainWindow(QWidget):
         self.btn_transcribe = QPushButton("Transcribe")
         controls.addWidget(self.btn_transcribe)
 
-        self.btn_cancel = QPushButton("Cancel remaining")
-        self.btn_cancel.setEnabled(False)
-        controls.addWidget(self.btn_cancel)
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setEnabled(False)
+        self.btn_stop.setToolTip("Stop all processing immediately")
+        controls.addWidget(self.btn_stop)
 
         # Open logs button
         self.btn_open_logs = QPushButton("Open Logs")
@@ -282,7 +288,7 @@ class MainWindow(QWidget):
         self.btn_add_folder.clicked.connect(self.add_folder)
         self.btn_clear.clicked.connect(self.file_list.clear)
         self.btn_transcribe.clicked.connect(self.start_transcription)
-        self.btn_cancel.clicked.connect(self.cancel_transcription)
+        self.btn_stop.clicked.connect(self.stop_transcription)
         self.btn_open_logs.clicked.connect(self.open_logs)
 
         self.worker = None
@@ -520,7 +526,7 @@ class MainWindow(QWidget):
             pass
 
         self.btn_transcribe.setEnabled(False)
-        self.btn_cancel.setEnabled(True)
+        self.btn_stop.setEnabled(True)
 
         # Reset counters
         self.total_files = len(files)
@@ -545,9 +551,12 @@ class MainWindow(QWidget):
         self.worker.device_info.connect(self.on_device_info)
         self.worker.start()
 
-    def cancel_transcription(self):
+    def stop_transcription(self):
+        """Immediately stop the current transcription worker."""
         if self.worker:
             self.worker.cancelled = True
+            self.progress_label.setText("⚠️ Stopping… please wait for current file to finish.")
+            logging.info("User requested stop.")
 
     def open_logs(self):
         try:
@@ -618,7 +627,7 @@ class MainWindow(QWidget):
 
     def on_all_done(self):
         self.btn_transcribe.setEnabled(True)
-        self.btn_cancel.setEnabled(False)
+        self.btn_stop.setEnabled(False)
         # Summarize results with guidance to check logs when needed
         if self._init_failed:
             self.progress_label.setText("❌ Failed to initialize the model. No transcriptions were created. Please check the logs (use the 'Open Logs' button).")

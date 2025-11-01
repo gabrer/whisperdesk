@@ -23,13 +23,13 @@ def _build_output_paths(wav: str, model_name: str, out_dir_cfg: str) -> Dict[str
         # Use same directory as input file
         out_dir = os.path.dirname(os.path.abspath(wav))
 
-    # Build filename: YYYYMMDD_HHMM_originalName_modelName.ext
+    # Build filename: fileName_YYYYMMDD_HHMM_modelName.ext
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     original_name = os.path.splitext(os.path.basename(wav))[0]
     model_short = model_name.replace("whisper-", "").replace("-ct2", "")
-    # New naming: [YYYYMMDD_HHMM_modelname_fileName]
-    base_name = f"{timestamp}_{model_short}_{original_name}"
+    # New naming: [fileName_yearMonthDay_time_modelName]
+    base_name = f"{original_name}_{timestamp}_{model_short}"
 
     out_txt = os.path.join(out_dir, base_name + ".txt")
     out_docx = os.path.join(out_dir, base_name + ".docx")
