@@ -190,109 +190,174 @@ class Worker(QThread):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("WhisperDesk (Offline)")
-        self.resize(800, 520)
+        self.setWindowTitle("WhisperDesk")
+        self.resize(1000, 720)
 
         self.cfg = Settings()
         self.log_path = setup_logging(self.cfg.log_level)
 
-        v = QVBoxLayout(self)
+        # Main layout with proper margins
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(16, 16, 16, 16)
+        main_layout.setSpacing(16)
 
-        # Status banner (device, RAM/VRAM)
+        # Header card - Status and device info
+        header_card = QFrame()
+        header_card.setObjectName("card")
+        header_layout = QVBoxLayout(header_card)
+        header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setSpacing(8)
+        
         self.status_label = QLabel(device_banner(is_gpu=(self.cfg.device_mode != 'cpu')))
-        v.addWidget(self.status_label)
+        self.status_label.setObjectName("subtitle")
+        header_layout.addWidget(self.status_label)
+        
+        self.device_runtime_label = QLabel("Runtime device: —")
+        self.device_runtime_label.setObjectName("caption")
+        header_layout.addWidget(self.device_runtime_label)
+        
+        main_layout.addWidget(header_card)
 
-        # Progress area
-        self.progress_label = QLabel("Ready.")
-        v.addWidget(self.progress_label)
+        # Progress card
+        progress_card = QFrame()
+        progress_card.setObjectName("card")
+        progress_layout = QVBoxLayout(progress_card)
+        progress_layout.setContentsMargins(16, 12, 16, 12)
+        progress_layout.setSpacing(8)
+        
+        self.progress_label = QLabel("Ready to transcribe")
+        self.progress_label.setObjectName("body")
+        progress_layout.addWidget(self.progress_label)
+        
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
-        v.addWidget(self.progress_bar)
-        # Runtime device indicator
-        self.device_runtime_label = QLabel("Runtime device: —")
-        v.addWidget(self.device_runtime_label)
+        self.progress_bar.setTextVisible(False)
+        progress_layout.addWidget(self.progress_bar)
+        
+        main_layout.addWidget(progress_card)
 
-        # File list + controls
+        # File list card
+        file_card = QFrame()
+        file_card.setObjectName("card")
+        file_card_layout = QVBoxLayout(file_card)
+        file_card_layout.setContentsMargins(16, 16, 16, 16)
+        file_card_layout.setSpacing(12)
+        
+        # File list header
+        file_header = QLabel("Audio Files")
+        file_header.setObjectName("cardTitle")
+        file_card_layout.addWidget(file_header)
+        
+        # File list
         self.file_list = QListWidget()
-        # Use QAbstractItemView's enum for selection modes
         self.file_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        v.addWidget(self.file_list, 1)
+        file_card_layout.addWidget(self.file_list, 1)
 
+        # File action buttons
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        self.btn_add_files = QPushButton("Add WAV files…")
-        self.btn_add_folder = QPushButton("Add folder…")
+        self.btn_add_files = QPushButton("Add Files")
+        self.btn_add_folder = QPushButton("Add Folder")
         self.btn_remove = QPushButton("Remove")
-        self.btn_remove.setObjectName("btn_remove")
-        self.btn_remove.setToolTip("Remove selected file(s) from the list")
-        self.btn_clear = QPushButton("Clear")
-        self.btn_clear.setObjectName("btn_clear")
+        self.btn_remove.setObjectName("btn_secondary")
+        self.btn_clear = QPushButton("Clear All")
+        self.btn_clear.setObjectName("btn_secondary")
         btn_row.addWidget(self.btn_add_files)
         btn_row.addWidget(self.btn_add_folder)
+        btn_row.addStretch()
         btn_row.addWidget(self.btn_remove)
         btn_row.addWidget(self.btn_clear)
-        v.addLayout(btn_row)
+        file_card_layout.addLayout(btn_row)
+        
+        main_layout.addWidget(file_card, 1)
 
-        # Model + outputs row
-        controls = QHBoxLayout()
-        controls.setSpacing(8)
-
-        controls.addWidget(QLabel("Model:"))
+        # Controls card
+        controls_card = QFrame()
+        controls_card.setObjectName("card")
+        controls_card_layout = QVBoxLayout(controls_card)
+        controls_card_layout.setContentsMargins(16, 16, 16, 16)
+        controls_card_layout.setSpacing(12)
+        
+        # Controls header
+        controls_header = QLabel("Configuration")
+        controls_header.setObjectName("cardTitle")
+        controls_card_layout.addWidget(controls_header)
+        
+        # Model selection row
+        model_row = QHBoxLayout()
+        model_row.setSpacing(8)
+        model_label = QLabel("Model:")
         self.model_combo = QComboBox()
-        # Build grouped model list with favorites
         self._rebuild_model_combo()
-        # choose preference if available
         pref = f"whisper-{self.cfg.model_preference}-ct2"
         texts = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
         if pref in texts:
             self.model_combo.setCurrentText(pref)
-        # Favorite toggle button
-        self.btn_fav = QPushButton("☆")
-        self.btn_fav.setToolTip("Toggle favorite for selected model")
+        
+        self.btn_fav = QPushButton("★")
+        self.btn_fav.setFixedWidth(36)
+        self.btn_fav.setObjectName("btn_icon")
+        self.btn_fav.setToolTip("Toggle favorite")
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
         self.btn_fav.clicked.connect(self._toggle_favorite)
-        controls.addWidget(self.model_combo)
-        controls.addWidget(self.btn_fav)
-        # Initialize star state
         self._on_model_changed(self.model_combo.currentText())
-
+        
+        model_row.addWidget(model_label)
+        model_row.addWidget(self.model_combo, 1)
+        model_row.addWidget(self.btn_fav)
+        controls_card_layout.addLayout(model_row)
+        
+        # Output formats row
+        format_row = QHBoxLayout()
+        format_row.setSpacing(12)
+        format_label = QLabel("Output:")
         self.chk_txt = QCheckBox("TXT")
         self.chk_txt.setChecked("txt" in self.cfg.output_formats)
         self.chk_docx = QCheckBox("DOCX")
         self.chk_docx.setChecked("docx" in self.cfg.output_formats)
-        controls.addWidget(self.chk_txt)
-        controls.addWidget(self.chk_docx)
+        format_row.addWidget(format_label)
+        format_row.addWidget(self.chk_txt)
+        format_row.addWidget(self.chk_docx)
+        format_row.addStretch()
+        controls_card_layout.addLayout(format_row)
+        
+        main_layout.addWidget(controls_card)
 
-        self.btn_transcribe = QPushButton("Transcribe")
-        self.btn_transcribe.setObjectName("btn_transcribe")
-        controls.addWidget(self.btn_transcribe)
-
+        # Action buttons row
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        
+        self.btn_transcribe = QPushButton("Start Transcription")
+        self.btn_transcribe.setObjectName("btn_primary")
+        self.btn_transcribe.setMinimumHeight(40)
+        
         self.btn_stop = QPushButton("Stop")
-        self.btn_stop.setObjectName("btn_stop")
+        self.btn_stop.setObjectName("btn_danger")
         self.btn_stop.setEnabled(False)
-        self.btn_stop.setToolTip("Stop all processing immediately")
-        controls.addWidget(self.btn_stop)
-
-        # Open output folder button
+        self.btn_stop.setMinimumHeight(40)
+        
         self.btn_open_output = QPushButton("Open Output")
-        self.btn_open_output.setToolTip("Open the output folder where transcriptions are saved")
-        controls.addWidget(self.btn_open_output)
-
-        # Open logs button
+        self.btn_open_output.setObjectName("btn_secondary")
+        
         self.btn_open_logs = QPushButton("Open Logs")
-        self.btn_open_logs.setToolTip("Open the log folder in your file browser")
-        controls.addWidget(self.btn_open_logs)
+        self.btn_open_logs.setObjectName("btn_secondary")
+        
+        action_row.addWidget(self.btn_transcribe, 2)
+        action_row.addWidget(self.btn_stop, 1)
+        action_row.addWidget(self.btn_open_output)
+        action_row.addWidget(self.btn_open_logs)
+        
+        main_layout.addLayout(action_row)
 
-        v.addLayout(controls)
-
-        # Tabs (Advanced)
+        # Settings tabs
         tabs = QTabWidget()
-        tabs.addTab(self._build_easy_tab(), "Easy")
-        tabs.addTab(self._build_advanced_tab(), "Advanced")
-        v.addWidget(tabs)
-        # Keep the parallel mode hint up-to-date as user changes device/workers
+        tabs.addTab(self._build_easy_tab(), "Language & Output")
+        tabs.addTab(self._build_advanced_tab(), "Advanced Settings")
+        main_layout.addWidget(tabs)
+        
+        # Update parallel hint
         try:
             self.device_combo.currentTextChanged.connect(self._update_parallel_hint)
             self.num_workers_combo.currentIndexChanged.connect(self._update_parallel_hint)
@@ -300,7 +365,7 @@ class MainWindow(QWidget):
         except Exception:
             pass
 
-        # Signals
+        # Connect signals
         self.btn_add_files.clicked.connect(self.add_files)
         self.btn_add_folder.clicked.connect(self.add_folder)
         self.btn_remove.clicked.connect(self.remove_selected_files)
@@ -311,7 +376,6 @@ class MainWindow(QWidget):
         self.btn_open_logs.clicked.connect(self.open_logs)
 
         self.worker = None
-        # Counters for result summary
         self.total_files = 0
         self.completed_count = 0
         self.error_count = 0
@@ -865,151 +929,222 @@ def main():
     font.setPointSize(10)
     app.setFont(font)
 
-    # Apply modern stylesheet
+    # Apply modern stylesheet - VS Code / Notion inspired
     stylesheet = """
         /* Global Styles */
         * {
-            font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
             font-size: 13px;
         }
 
         /* Main Window */
         QWidget {
-            background-color: #f5f5f5;
-            color: #2c3e50;
+            background-color: #fafafa;
+            color: #1e1e1e;
+        }
+
+        /* Cards - Framed panels with subtle shadows */
+        QFrame#card {
+            background-color: #ffffff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+        }
+
+        /* Typography */
+        QLabel#cardTitle {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e1e1e;
+            padding: 0px;
+        }
+
+        QLabel#subtitle {
+            font-size: 12px;
+            font-weight: 500;
+            color: #424242;
+        }
+
+        QLabel#body {
+            font-size: 13px;
+            color: #424242;
+        }
+
+        QLabel#caption {
+            font-size: 11px;
+            color: #757575;
+        }
+
+        QLabel {
+            color: #424242;
+            padding: 2px;
         }
 
         /* Tab Widget */
         QTabWidget::pane {
-            border: 1px solid #d0d0d0;
-            border-radius: 4px;
-            background-color: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            background-color: #ffffff;
             padding: 16px;
+            top: -1px;
         }
-
+        
         QTabBar::tab {
-            background-color: #e8e8e8;
-            color: #5a6c7d;
+            background-color: transparent;
+            color: #757575;
             padding: 8px 16px;
-            margin-right: 2px;
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
+            margin-right: 4px;
+            border: none;
+            border-bottom: 2px solid transparent;
             font-weight: 500;
-            border: 1px solid #d0d0d0;
-            border-bottom: none;
         }
-
+        
         QTabBar::tab:selected {
-            background-color: white;
-            color: #2c3e50;
-            border-bottom: 2px solid white;
+            color: #1e1e1e;
+            border-bottom: 2px solid #0078d4;
         }
-
+        
         QTabBar::tab:hover:!selected {
-            background-color: #f0f0f0;
+            color: #424242;
+            background-color: rgba(0, 0, 0, 0.02);
+        }
+        
+        /* Primary Button */
+        QPushButton#btn_primary {
+            background-color: #0078d4;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-weight: 500;
+            min-height: 32px;
         }
 
-        /* Buttons */
-        QPushButton {
-            background-color: #e9ecef;
-            color: #495057;
-            border: 1px solid #ced4da;
-            padding: 6px 14px;
-            border-radius: 4px;
+        QPushButton#btn_primary:hover {
+            background-color: #106ebe;
+        }
+
+        QPushButton#btn_primary:pressed {
+            background-color: #005a9e;
+        }
+
+        QPushButton#btn_primary:disabled {
+            background-color: #e0e0e0;
+            color: #9e9e9e;
+        }
+
+        /* Danger Button */
+        QPushButton#btn_danger {
+            background-color: #d32f2f;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
             font-weight: 500;
-            min-height: 28px;
-            font-size: 13px;
+            min-height: 32px;
+        }
+
+        QPushButton#btn_danger:hover {
+            background-color: #c62828;
+        }
+
+        QPushButton#btn_danger:pressed {
+            background-color: #b71c1c;
+        }
+
+        QPushButton#btn_danger:disabled {
+            background-color: #e0e0e0;
+            color: #9e9e9e;
+        }
+
+        /* Secondary Button */
+        QPushButton#btn_secondary, QPushButton#btn_icon {
+            background-color: #ffffff;
+            color: #424242;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-weight: 500;
+            min-height: 32px;
+        }
+
+        QPushButton#btn_secondary:hover, QPushButton#btn_icon:hover {
+            background-color: #f5f5f5;
+            border-color: #bdbdbd;
+        }
+
+        QPushButton#btn_secondary:pressed, QPushButton#btn_icon:pressed {
+            background-color: #eeeeee;
+        }
+
+        QPushButton#btn_secondary:disabled, QPushButton#btn_icon:disabled {
+            background-color: #fafafa;
+            color: #9e9e9e;
+            border-color: #e0e0e0;
+        }
+
+        /* Default Buttons */
+        QPushButton {
+            background-color: #ffffff;
+            color: #424242;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-weight: 500;
+            min-height: 32px;
         }
 
         QPushButton:hover {
-            background-color: #dee2e6;
-            border-color: #adb5bd;
+            background-color: #f5f5f5;
+            border-color: #bdbdbd;
         }
 
         QPushButton:pressed {
-            background-color: #ced4da;
+            background-color: #eeeeee;
         }
 
         QPushButton:disabled {
-            background-color: #f8f9fa;
-            color: #adb5bd;
-            border-color: #dee2e6;
-        }        color: #adb5bd;
-            border-color: #dee2e6;
+            background-color: #fafafa;
+            color: #9e9e9e;
+            border-color: #e0e0e0;
         }
-
-        QPushButton#btn_stop {
-            background-color: #f8d7da;
-            color: #721c24;
-            border-color: #f5c6cb;
-        }
-
-        QPushButton#btn_stop:hover {
-            background-color: #f1b0b7;
-            border-color: #e2a1a8;
-        }
-
-        QPushButton#btn_clear, QPushButton#btn_remove {
-            background-color: #e9ecef;
-            color: #6c757d;
-            border-color: #ced4da;
-        }
-
-        QPushButton#btn_clear:hover, QPushButton#btn_remove:hover {
-            background-color: #dee2e6;
-            border-color: #adb5bd;
-        }
-
-        QPushButton#btn_transcribe {
-            background-color: #d1ecf1;
-            color: #0c5460;
-            border-color: #bee5eb;
-        }
-
-        QPushButton#btn_transcribe:hover {
-            background-color: #b8daff;
-            border-color: #9fcdff;
-        }
-
+        
         /* Line Edit */
         QLineEdit {
             padding: 8px 12px;
-            border: 1px solid #ced4da;
-            border-radius: 4px;
-            background-color: white;
-            selection-background-color: #b8daff;
-            color: #2c3e50;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            background-color: #ffffff;
+            selection-background-color: #cce4f7;
+            color: #1e1e1e;
             min-height: 32px;
         }
 
         QLineEdit:focus {
-            border: 1px solid #80bdff;
-            background-color: white;
+            border: 1px solid #0078d4;
+            background-color: #ffffff;
         }
-
+        
         QLineEdit:hover {
-            border-color: #adb5bd;
+            border-color: #bdbdbd;
         }
 
         /* Combo Box */
         QComboBox {
             padding: 8px 12px;
-            border: 1px solid #ced4da;
-            border-radius: 4px;
-            background-color: white;
-            color: #2c3e50;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            background-color: #ffffff;
+            color: #1e1e1e;
             min-height: 32px;
         }
 
         QComboBox:focus {
-            border: 1px solid #80bdff;
+            border: 1px solid #0078d4;
         }
-
+        
         QComboBox:hover {
-            border-color: #adb5bd;
-        }
-
-        /* Line Edit */
+            border-color: #bdbdbd;
+        }        /* Line Edit */
         QLineEdit {
             padding: 10px 14px;
             border: 1px solid rgba(226, 232, 240, 0.8);
@@ -1059,146 +1194,140 @@ def main():
             image: none;
             border-left: 4px solid transparent;
             border-right: 4px solid transparent;
-            border-top: 6px solid #6c757d;
+            border-top: 6px solid #757575;
             margin-right: 8px;
         }
 
         QComboBox QAbstractItemView {
-            border: 1px solid #ced4da;
-            border-radius: 4px;
-            background-color: white;
-            selection-background-color: #d1ecf1;
-            selection-color: #2c3e50;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            background-color: #ffffff;
+            selection-background-color: #e3f2fd;
+            selection-color: #1e1e1e;
             padding: 4px;
+            outline: none;
         }
 
         /* List Widget */
         QListWidget {
-            border: 1px solid #ced4da;
-            border-radius: 4px;
-            background-color: white;
-            padding: 8px;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            background-color: #ffffff;
+            padding: 4px;
+            outline: none;
         }
 
         QListWidget::item {
-            padding: 8px;
+            padding: 10px 12px;
             border-radius: 4px;
-            margin: 2px 0;
-            color: #2c3e50;
+            margin: 2px 0px;
+            color: #1e1e1e;
+            border: none;
         }
 
         QListWidget::item:selected {
-            background-color: #d1ecf1;
-            color: #0c5460;
-            border: 1px solid #bee5eb;
+            background-color: #e3f2fd;
+            color: #0078d4;
         }
 
         QListWidget::item:hover:!selected {
-            background-color: #f8f9fa;
+            background-color: #f5f5f5;
         }
 
         /* Check Box */
         QCheckBox {
             spacing: 8px;
             padding: 4px;
-            color: #2c3e50;
+            color: #1e1e1e;
         }
 
         QCheckBox::indicator {
             width: 18px;
             height: 18px;
-            border: 1px solid #ced4da;
-            border-radius: 3px;
-            background-color: white;
+            border: 1px solid #bdbdbd;
+            border-radius: 4px;
+            background-color: #ffffff;
         }
 
         QCheckBox::indicator:hover {
-            border-color: #80bdff;
+            border-color: #0078d4;
         }
 
         QCheckBox::indicator:checked {
-            background-color: #d1ecf1;
-            border-color: #17a2b8;
+            background-color: #0078d4;
+            border-color: #0078d4;
             image: none;
         }
 
         /* Progress Bar */
         QProgressBar {
-            border: 1px solid #ced4da;
+            border: none;
             border-radius: 4px;
             text-align: center;
-            background-color: #e9ecef;
-            height: 24px;
-            color: #495057;
-            font-weight: 500;
+            background-color: #e0e0e0;
+            height: 6px;
+            color: transparent;
         }
 
         QProgressBar::chunk {
-            background-color: #17a2b8;
-            border-radius: 3px;
-        }
-
-        /* Labels */
-        QLabel {
-            color: #2c3e50;
-            padding: 2px;
-        }
-
-        QLabel#heading {
-            font-size: 16px;
-            font-weight: 600;
-            color: #2c3e50;
-            padding: 8px 0;
-        }
-
-        QLabel#subheading {
-            font-size: 14px;
-            font-weight: 500;
-            color: #495057;
-            padding: 4px 0;
+            background-color: #0078d4;
+            border-radius: 4px;
         }
 
         /* Scrollbar */
         QScrollBar:vertical {
             border: none;
-            background-color: #f5f5f5;
+            background-color: transparent;
             width: 10px;
-            border-radius: 5px;
+            margin: 0px;
         }
 
         QScrollBar::handle:vertical {
-            background-color: #adb5bd;
+            background-color: #bdbdbd;
             border-radius: 5px;
             min-height: 20px;
         }
 
         QScrollBar::handle:vertical:hover {
-            background-color: #6c757d;
+            background-color: #9e9e9e;
         }
 
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             height: 0px;
         }
 
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            background: none;
+        }
+
         QScrollBar:horizontal {
             border: none;
-            background-color: #f5f5f5;
+            background-color: transparent;
             height: 10px;
-            border-radius: 5px;
+            margin: 0px;
         }
 
         QScrollBar::handle:horizontal {
-            background-color: #adb5bd;
+            background-color: #bdbdbd;
             border-radius: 5px;
             min-width: 20px;
         }
 
         QScrollBar::handle:horizontal:hover {
-            background-color: #6c757d;
+            background-color: #9e9e9e;
         }
 
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
             width: 0px;
+        }
+
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+            background: none;
+        }
+
+        /* Form Layout Spacing */
+        QFormLayout {
+            spacing: 12px;
         }
     """
 
@@ -1206,8 +1335,8 @@ def main():
     app.setQuitOnLastWindowClosed(True)
 
     w = MainWindow()
-    w.setWindowTitle("WhisperDesk - Professional Transcription System")
-    w.setMinimumSize(900, 700)
+    w.setWindowTitle("WhisperDesk")
+    w.setMinimumSize(1000, 720)
     w.show()
 
     exit_code = app.exec()
