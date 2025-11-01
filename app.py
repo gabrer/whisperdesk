@@ -220,9 +220,12 @@ class MainWindow(QWidget):
         btn_row = QHBoxLayout()
         self.btn_add_files = QPushButton("Add WAV files…")
         self.btn_add_folder = QPushButton("Add folder…")
+        self.btn_remove = QPushButton("Remove")
+        self.btn_remove.setToolTip("Remove selected file(s) from the list")
         self.btn_clear = QPushButton("Clear")
         btn_row.addWidget(self.btn_add_files)
         btn_row.addWidget(self.btn_add_folder)
+        btn_row.addWidget(self.btn_remove)
         btn_row.addWidget(self.btn_clear)
         v.addLayout(btn_row)
 
@@ -286,6 +289,7 @@ class MainWindow(QWidget):
         # Signals
         self.btn_add_files.clicked.connect(self.add_files)
         self.btn_add_folder.clicked.connect(self.add_folder)
+        self.btn_remove.clicked.connect(self.remove_selected_files)
         self.btn_clear.clicked.connect(self.file_list.clear)
         self.btn_transcribe.clicked.connect(self.start_transcription)
         self.btn_stop.clicked.connect(self.stop_transcription)
@@ -447,6 +451,15 @@ class MainWindow(QWidget):
             for name in os.listdir(folder):
                 if name.lower().endswith('.wav'):
                     self.file_list.addItem(QListWidgetItem(os.path.join(folder, name)))
+
+    def remove_selected_files(self):
+        """Remove selected file(s) from the list."""
+        selected_items = self.file_list.selectedItems()
+        if not selected_items:
+            return
+        for item in selected_items:
+            row = self.file_list.row(item)
+            self.file_list.takeItem(row)
 
     def choose_output_dir(self):
         folder = QFileDialog.getExistingDirectory(self, "Select output folder", app_root())
