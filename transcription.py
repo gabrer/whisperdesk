@@ -139,78 +139,111 @@ class Transcriber:
 
         def update_download_progress():
             """Periodically update download progress with download speed indicator."""
-            if not download_progress_active:
-                return
-
-            # Calculate actual download speed by monitoring cache directory
-            speed_str = ""
             try:
-                import time
-                # Get the download cache directory for this model
-                org = "Systran"
-                remote_short = to_remote_name(model_name)
-                repo = f"faster-whisper-{remote_short}"
-                cache_dir_name = f"models--{org}--{repo}"
-                cache_path = os.path.join(models_root(), cache_dir_name)
+                logging.debug("[DownloadProgress] update_download_progress called, counter=%d, active=%s",
+                             download_progress_counter[0], download_progress_active)
 
-                if os.path.isdir(cache_path):
-                    # Calculate total size of files in the cache directory
-                    total_size = 0
-                    for dirpath, dirnames, filenames in os.walk(cache_path):
-                        for filename in filenames:
-                            filepath = os.path.join(dirpath, filename)
-                            try:
-                                total_size += os.path.getsize(filepath)
-                            except Exception:
-                                pass
+                if not download_progress_active:
+                    logging.debug("[DownloadProgress] Progress inactive, returning")
+                    return
 
-                    current_time = time.time()
-                    if download_progress_counter[0] > 0:  # Not the first iteration
-                        time_diff = current_time - download_last_time[0]
-                        size_diff = total_size - download_last_size[0]
+                # Calculate actual download speed by monitoring cache directory
+                speed_str = ""
+                try:
+                    import time
+                    # Get the download cache directory for this model
+                    org = "Systran"
+                    remote_short = to_remote_name(model_name)
+                    repo = f"faster-whisper-{remote_short}"
+                    cache_dir_name = f"models--{org}--{repo}"
+                    cache_path = os.path.join(models_root(), cache_dir_name)
 
-                        if time_diff > 0 and size_diff >= 0:
-                            # Calculate speed in bytes per second
-                            speed_bps = size_diff / time_diff
+                    logging.debug("[DownloadProgress] Checking cache path: %s (exists=%s)",
+                                 cache_path, os.path.isdir(cache_path))
 
-                            # Format speed in human-readable form
-                            if speed_bps >= 1024 * 1024 * 1024:  # GB/s
-                                speed_str = f" ({speed_bps / (1024 * 1024 * 1024):.1f} GB/s)"
-                            elif speed_bps >= 1024 * 1024:  # MB/s
-                                speed_str = f" ({speed_bps / (1024 * 1024):.1f} MB/s)"
-                            elif speed_bps >= 1024:  # KB/s
-                                speed_str = f" ({speed_bps / 1024:.1f} KB/s)"
-                            else:
-                                speed_str = f" ({speed_bps:.0f} B/s)"
+                    if os.path.isdir(cache_path):
+                        # Calculate total size of files in the cache directory
+                        total_size = 0
+                        file_count = 0
+                        for dirpath, dirnames, filenames in os.walk(cache_path):
+                            for filename in filenames:
+                                filepath = os.path.join(dirpath, filename)
+                                try:
+                                    file_size = os.path.getsize(filepath)
+                                    total_size += file_size
+                                    file_count += 1
+                                except Exception as file_err:
+                                    logging.debug("[DownloadProgress] Failed to get size of %s: %s", filepath, str(file_err))
 
-                    # Update tracking variables
-                    download_last_size[0] = total_size
-                    download_last_time[0] = current_time
-            except Exception as e:
-                # If speed calculation fails, fall back to animated dots
-                logging.debug("Download speed calculation failed: %s", str(e))
-                dots = "." * ((download_progress_counter[0] % 4))
-                spaces = " " * (3 - len(dots))
-                speed_str = f"{dots}{spaces}"
+                        logging.debug("[DownloadProgress] Total size: %d bytes (%d files)", total_size, file_count)
 
-            download_progress_counter[0] += 1
-            if progress_callback:
-                msg = f"Downloading model{speed_str}"
-                progress_callback(msg, 10 + (download_progress_counter[0] % 30))
+                        current_time = time.time()
+                        if download_progress_counter[0] > 0:  # Not the first iteration
+                            time_diff = current_time - download_last_time[0]
+                            size_diff = total_size - download_last_size[0]
 
-            # Schedule next update
-            import threading
-            nonlocal download_timer
-            download_timer = threading.Timer(0.5, update_download_progress)
-            download_timer.daemon = True
-            download_timer.start()
+                            logging.debug("[DownloadProgress] Speed calc: size_diff=%d bytes, time_diff=%.2f sec",
+                                        size_diff, time_diff)
+
+                            if time_diff > 0 and size_diff >= 0:
+                                # Calculate speed in bytes per second
+                                speed_bps = size_diff / time_diff
+
+                                logging.debug("[DownloadProgress] Calculated speed: %.2f B/s", speed_bps)
+
+                                # Format speed in human-readable form
+                                if speed_bps >= 1024 * 1024 * 1024:  # GB/s
+                                    speed_str = f" ({speed_bps / (1024 * 1024 * 1024):.1f} GB/s)"
+                                elif speed_bps >= 1024 * 1024:  # MB/s
+                                    speed_str = f" ({speed_bps / (1024 * 1024):.1f} MB/s)"
+                                elif speed_bps >= 1024:  # KB/s
+                                    speed_str = f" ({speed_bps / 1024:.1f} KB/s)"
+                                else:
+                                    speed_str = f" ({speed_bps:.0f} B/s)"
+                        else:
+                            logging.debug("[DownloadProgress] First iteration, no speed yet")
+
+                        # Update tracking variables
+                        download_last_size[0] = total_size
+                        download_last_time[0] = current_time
+                    else:
+                        logging.debug("[DownloadProgress] Cache directory not found yet, using animated dots")
+                        dots = "." * ((download_progress_counter[0] % 4))
+                        spaces = " " * (3 - len(dots))
+                        speed_str = f"{dots}{spaces}"
+                except Exception as e:
+                    # If speed calculation fails, fall back to animated dots
+                    logging.warning("[DownloadProgress] Speed calculation failed: %s", str(e), exc_info=True)
+                    dots = "." * ((download_progress_counter[0] % 4))
+                    spaces = " " * (3 - len(dots))
+                    speed_str = f"{dots}{spaces}"
+
+                download_progress_counter[0] += 1
+                if progress_callback:
+                    msg = f"Downloading model{speed_str}"
+                    logging.debug("[DownloadProgress] Calling progress_callback with: %s", msg)
+                    progress_callback(msg, 10 + (download_progress_counter[0] % 30))
+
+                # Schedule next update
+                import threading
+                nonlocal download_timer
+                logging.debug("[DownloadProgress] Scheduling next timer in 0.5s")
+                download_timer = threading.Timer(0.5, update_download_progress)
+                download_timer.daemon = True
+                download_timer.start()
+                logging.debug("[DownloadProgress] Timer started successfully")
+            except Exception as outer_err:
+                logging.error("[DownloadProgress] Critical error in update_download_progress: %s", str(outer_err), exc_info=True)
 
         if progress_callback:
             progress_callback("Initializing model...", 0)
             # If we resolved to a remote id (not a local directory), warn about long download
             if not os.path.isabs(model_id):
+                logging.info("[ModelInit] Starting download progress tracker for remote model: %s", model_id)
                 download_progress_active = True
                 update_download_progress()
+            else:
+                logging.info("[ModelInit] Using local model, no download needed: %s", model_id)
 
         # Force faster-whisper/HF Hub to download models to our local models/ folder
         # Set download_root to ensure models are stored in models/ instead of user cache
@@ -248,7 +281,9 @@ class Transcriber:
         if device == "cuda":
             for ct in compute_types_to_try:
                 try:
-                    logging.info("Attempting to load model with compute_type=%s", ct)
+                    logging.info("[ModelInit] Attempting to load GPU model with compute_type=%s", ct)
+                    logging.info("[ModelInit] WhisperModel params: model_id=%s, device=%s, compute_type=%s, num_workers=%d, cpu_threads=%d, download_root=%s",
+                                model_id, device, ct, num_workers, 1 if device == "cpu" else 4, download_root)
                     self.model = WhisperModel(
                         model_id,
                         device=device,
@@ -257,6 +292,7 @@ class Transcriber:
                         cpu_threads=1 if device == "cpu" else 4,
                         download_root=download_root,
                     )
+                    logging.info("[ModelInit] WhisperModel successfully loaded with compute_type=%s", ct)
                     if ct != compute_type:
                         logging.warning("Fell back to compute_type=%s (original %s not supported)", ct, compute_type)
                     loaded = True
@@ -283,6 +319,9 @@ class Transcriber:
                 )
                 if progress_callback:
                     progress_callback("GPU unavailable/unsupported; falling back to CPU...", 15)
+                logging.info("[ModelInit] Attempting CPU fallback with compute_type=%s", cpu_ct)
+                logging.info("[ModelInit] WhisperModel params: model_id=%s, device=cpu, compute_type=%s, num_workers=%d, cpu_threads=1, download_root=%s",
+                            model_id, cpu_ct, num_workers, download_root)
                 self.model = WhisperModel(
                     model_id,
                     device="cpu",
@@ -292,11 +331,14 @@ class Transcriber:
                     download_root=download_root,
                 )
                 loaded = True
-                logging.warning("CPU fallback succeeded (compute_type=%s)", cpu_ct)
+                logging.info("[ModelInit] CPU fallback succeeded (compute_type=%s)", cpu_ct)
                 self.active_device = "cpu"
                 self.active_compute_type = cpu_ct
         else:
             # Non-GPU path: just load with the chosen CPU compute type
+            logging.info("[ModelInit] Loading CPU model directly with compute_type=%s", compute_type)
+            logging.info("[ModelInit] WhisperModel params: model_id=%s, device=%s, compute_type=%s, num_workers=%d, cpu_threads=1, download_root=%s",
+                        model_id, device, compute_type, num_workers, download_root)
             self.model = WhisperModel(
                 model_id,
                 device=device,
@@ -305,15 +347,22 @@ class Transcriber:
                 cpu_threads=1,
                 download_root=download_root,
             )
+            logging.info("[ModelInit] CPU model successfully loaded")
             self.active_device = device
             self.active_compute_type = compute_type
 
         # Stop download progress timer if it was started
+        logging.info("[ModelInit] Stopping download progress timer (active=%s, timer=%s)", download_progress_active, download_timer is not None)
         download_progress_active = False
         if download_timer:
-            download_timer.cancel()
+            try:
+                download_timer.cancel()
+                logging.info("[ModelInit] Download timer cancelled successfully")
+            except Exception as timer_err:
+                logging.warning("[ModelInit] Failed to cancel download timer: %s", str(timer_err))
 
         if progress_callback:
+            logging.info("[ModelInit] Model initialization complete, calling progress_callback")
             progress_callback("Model loaded.", 100)
 
         self.language = language_hint
