@@ -2,6 +2,8 @@ import os
 import sys
 import logging
 from typing import List
+import threading
+import signal
 
 from PySide6.QtCore import QThread, Signal, QUrl, Qt
 from PySide6.QtGui import (
@@ -47,14 +49,45 @@ class Worker(QThread):
             # Set environment variable to avoid OpenMP conflicts with Qt
             os.environ['OMP_NUM_THREADS'] = '1'
 
-            tr = Transcriber(
-                model_name=self.model_name,
-                device_mode=self.cfg.device_mode,
-                language_hint=self.cfg.language_hint,
-                word_timestamps=self.cfg.word_timestamps,
-                num_workers=self.cfg.num_workers,
-                progress_callback=on_progress
-            )
+            # Windows-specific fix: Use a timeout for model initialization
+            # to prevent infinite hangs during download
+            tr = None
+            init_error = None
+
+            def init_model():
+                nonlocal tr, init_error
+                try:
+                    tr = Transcriber(
+                        model_name=self.model_name,
+                        device_mode=self.cfg.device_mode,
+                        language_hint=self.cfg.language_hint,
+                        word_timestamps=self.cfg.word_timestamps,
+                        num_workers=self.cfg.num_workers,
+                        progress_callback=on_progress
+                    )
+                except Exception as e:
+                    init_error = e
+
+            # Run model initialization in a thread with timeout
+            init_thread = threading.Thread(target=init_model, daemon=True)
+            init_thread.start()
+            init_thread.join(timeout=600)  # 10 minute timeout
+
+            if init_thread.is_alive():
+                # Timeout occurred
+                raise TimeoutError(
+                    f"Model initialization timed out after 10 minutes. "
+                    f"This usually means the download is stuck. "
+                    f"Please manually download the model to {models_root()} "
+                    f"or use a model that's already available locally."
+                )
+
+            if init_error:
+                raise init_error
+
+            if tr is None:
+                raise RuntimeError("Model initialization failed for unknown reason")
+
             # Inform UI about the actual runtime device in use
             try:
                 info = f"{getattr(tr, 'active_device', self.cfg.device_mode)} ({getattr(tr, 'active_compute_type', 'unknown')})"
@@ -939,11 +972,16 @@ def main():
     # This must be done at app startup, not in worker threads
     os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
     os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '0'
-    os.environ['HF_HUB_DOWNLOAD_TIMEOUT'] = '300'  # 5 minutes timeout
 
-    setup_logging()
+    # CRITICAL FIX for Windows PyInstaller builds:
+    # Force httpx to use HTTP/1.1 instead of HTTP/2 which causes hangs on Windows
+    # Also disable connection pooling which conflicts with Qt event loop
+    if sys.platform == 'win32':
+        os.environ['HTTPX_DISABLE_HTTP2'] = '1'
+        # Use requests library instead of httpx for downloads (more compatible with PyInstaller)
+        os.environ['HF_HUB_ENABLE_REQUESTS'] = '1'
 
-    # Enable HiDPI support for sharp rendering on high-resolution displays
+    setup_logging()    # Enable HiDPI support for sharp rendering on high-resolution displays
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
