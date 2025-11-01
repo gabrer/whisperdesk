@@ -131,11 +131,86 @@ class Transcriber:
                 compute_type = "int8" if (is_macos or is_windows) else "int8_float16"
 
         # Report progress if callback provided
+        download_progress_active = False
+        download_progress_counter = [0]  # Mutable list to avoid closure issues
+        download_timer = None
+        download_last_size = [0]  # Track previous size for speed calculation
+        download_last_time = [0.0]  # Track previous time for speed calculation
+
+        def update_download_progress():
+            """Periodically update download progress with download speed indicator."""
+            if not download_progress_active:
+                return
+
+            # Calculate actual download speed by monitoring cache directory
+            speed_str = ""
+            try:
+                import time
+                # Get the download cache directory for this model
+                org = "Systran"
+                remote_short = to_remote_name(model_name)
+                repo = f"faster-whisper-{remote_short}"
+                cache_dir_name = f"models--{org}--{repo}"
+                cache_path = os.path.join(models_root(), cache_dir_name)
+
+                if os.path.isdir(cache_path):
+                    # Calculate total size of files in the cache directory
+                    total_size = 0
+                    for dirpath, dirnames, filenames in os.walk(cache_path):
+                        for filename in filenames:
+                            filepath = os.path.join(dirpath, filename)
+                            try:
+                                total_size += os.path.getsize(filepath)
+                            except Exception:
+                                pass
+
+                    current_time = time.time()
+                    if download_progress_counter[0] > 0:  # Not the first iteration
+                        time_diff = current_time - download_last_time[0]
+                        size_diff = total_size - download_last_size[0]
+
+                        if time_diff > 0 and size_diff >= 0:
+                            # Calculate speed in bytes per second
+                            speed_bps = size_diff / time_diff
+
+                            # Format speed in human-readable form
+                            if speed_bps >= 1024 * 1024 * 1024:  # GB/s
+                                speed_str = f" ({speed_bps / (1024 * 1024 * 1024):.1f} GB/s)"
+                            elif speed_bps >= 1024 * 1024:  # MB/s
+                                speed_str = f" ({speed_bps / (1024 * 1024):.1f} MB/s)"
+                            elif speed_bps >= 1024:  # KB/s
+                                speed_str = f" ({speed_bps / 1024:.1f} KB/s)"
+                            else:
+                                speed_str = f" ({speed_bps:.0f} B/s)"
+
+                    # Update tracking variables
+                    download_last_size[0] = total_size
+                    download_last_time[0] = current_time
+            except Exception as e:
+                # If speed calculation fails, fall back to animated dots
+                logging.debug("Download speed calculation failed: %s", str(e))
+                dots = "." * ((download_progress_counter[0] % 4))
+                spaces = " " * (3 - len(dots))
+                speed_str = f"{dots}{spaces}"
+
+            download_progress_counter[0] += 1
+            if progress_callback:
+                msg = f"Downloading model{speed_str}"
+                progress_callback(msg, 10 + (download_progress_counter[0] % 30))
+
+            # Schedule next update
+            import threading
+            nonlocal download_timer
+            download_timer = threading.Timer(0.5, update_download_progress)
+            download_timer.daemon = True
+            download_timer.start()
+
         if progress_callback:
             progress_callback("Initializing model...", 0)
             # If we resolved to a remote id (not a local directory), warn about long download
             if not os.path.isabs(model_id):
-                progress_callback("Downloading model (this may take several minutes for large models)...", 10)
+                download_progress_active = True
+                update_download_progress()
 
         # Force faster-whisper/HF Hub to download models to our local models/ folder
         # Set download_root to ensure models are stored in models/ instead of user cache
@@ -232,6 +307,11 @@ class Transcriber:
             )
             self.active_device = device
             self.active_compute_type = compute_type
+
+        # Stop download progress timer if it was started
+        download_progress_active = False
+        if download_timer:
+            download_timer.cancel()
 
         if progress_callback:
             progress_callback("Model loaded.", 100)
