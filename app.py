@@ -1019,6 +1019,8 @@ def main():
             ca_file = certifi.where()
             os.environ['SSL_CERT_FILE'] = ca_file
             os.environ['REQUESTS_CA_BUNDLE'] = ca_file
+            # Force httpx to use certifi bundle (critical for PyInstaller)
+            os.environ['HTTPX_VERIFY'] = ca_file
             logging.info("[Startup] SSL certificates configured from certifi: %s", ca_file)
             logging.info("[FileSystem] SSL cert file exists: %s", os.path.exists(ca_file))
         except Exception as e:

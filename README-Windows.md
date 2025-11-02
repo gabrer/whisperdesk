@@ -82,6 +82,23 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -IncludeSpeechBrain
 - If torchaudio import errors occur in SpeechBrain mode, rebuild with `-IncludeSpeechBrain`.
 - If audio resampling fails, install `scipy` (already in requirements.txt).
 
+### Model downloads hang or freeze
+
+**Symptoms:** App freezes during model download, especially in bundled .exe builds.
+
+**Cause:** Windows Defender (or other antivirus) real-time scanning locks files during download, causing indefinite hangs.
+
+**Solution:** Add Windows Defender exclusion for the cache folder:
+
+```powershell
+# Run PowerShell as Administrator
+Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\WhisperDesk"
+```
+
+This tells Windows Defender to skip scanning the WhisperDesk cache folder, preventing file locks during downloads.
+
+**Alternative:** Pre-download models on a different machine and copy them to `models/` folder before building the bundle.
+
 ### Model downloads and cache
 
 - When a model isn't found under `models/`, WhisperDesk will download it to a per-user cache:

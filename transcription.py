@@ -153,6 +153,29 @@ class Transcriber:
                     logging.info("[Download] local_dir_use_symlinks: False (Windows compatibility)")
                     logging.info("[Download] max_workers: 1 (reduce file contention)")
 
+                    # Clean up incomplete downloads to avoid lock files and stale state
+                    import shutil
+                    target_repo_dir = os.path.join(cache_dir, f"models--Systran--faster-whisper-{remote_short}")
+                    if os.path.isdir(target_repo_dir):
+                        snapshot_dir = os.path.join(target_repo_dir, "snapshots")
+                        if os.path.isdir(snapshot_dir):
+                            logging.info("[Download] Checking for incomplete snapshots in: %s", snapshot_dir)
+                            try:
+                                for snap in os.listdir(snapshot_dir):
+                                    snap_path = os.path.join(snapshot_dir, snap)
+                                    if os.path.isdir(snap_path):
+                                        if not _looks_like_ct2_dir(snap_path):
+                                            logging.warning("[Download] Removing incomplete snapshot: %s", snap_path)
+                                            try:
+                                                shutil.rmtree(snap_path, ignore_errors=True)
+                                                logging.info("[Download] Removed incomplete snapshot successfully")
+                                            except Exception as rm_err:
+                                                logging.error("[Download] Failed to remove incomplete snapshot: %s", str(rm_err))
+                                        else:
+                                            logging.info("[Download] Snapshot %s appears complete, keeping", snap)
+                            except Exception as cleanup_err:
+                                logging.warning("[Download] Error during cleanup: %s", str(cleanup_err))
+
                     # Start a lightweight monitor on Windows to log cache growth during download
                     monitor_stop = None
                     monitor_thread = None
@@ -226,18 +249,133 @@ class Transcriber:
                         pass
 
                     logging.info("[Trace] ENTER snapshot_download call")
-                    # Honor env timeout if set; otherwise default to 60s per request via env set in app.py
-                    # Limit worker threads to 1 to reduce file contention on Windows
-                    snapshot_path = snapshot_download(
-                        repo_id=f"Systran/faster-whisper-{remote_short}",
-                        cache_dir=cache_dir,
-                        local_files_only=False,
-                        allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
-                        max_workers=1,
-                        local_dir_use_symlinks=False,
-                        revision="main",
-                        resume_download=True,
-                    )
+
+                    # Use custom downloader on Windows for better control and diagnostics
+                    # Falls back to snapshot_download on other platforms
+                    snapshot_path: Optional[str] = None
+                    download_success = False
+
+                    if platform.system() == "Windows":
+                        logging.info("[Download] Using manual file-by-file downloader on Windows")
+                        try:
+                            import requests
+                            from huggingface_hub import hf_hub_url
+                            import certifi
+
+                            # Create snapshot directory structure
+                            repo_id = f"Systran/faster-whisper-{remote_short}"
+
+                            # Get revision hash first
+                            api_url = f"https://huggingface.co/api/models/{repo_id}/revision/main"
+                            logging.info("[Download] Fetching revision info from: %s", api_url)
+                            rev_resp = requests.get(api_url, timeout=30, verify=certifi.where())
+                            rev_resp.raise_for_status()
+                            revision_hash = rev_resp.json().get("sha", "main")
+                            logging.info("[Download] Resolved revision hash: %s", revision_hash)
+
+                            # Create snapshot directory
+                            repo_cache_dir = os.path.join(cache_dir, f"models--Systran--faster-whisper-{remote_short}")
+                            snapshot_dir = os.path.join(repo_cache_dir, "snapshots", revision_hash)
+                            os.makedirs(snapshot_dir, exist_ok=True)
+                            logging.info("[Download] Created snapshot directory: %s", snapshot_dir)
+
+                            # Update refs/main
+                            refs_dir = os.path.join(repo_cache_dir, "refs")
+                            os.makedirs(refs_dir, exist_ok=True)
+                            main_ref = os.path.join(refs_dir, "main")
+                            with open(main_ref, 'w') as f:
+                                f.write(revision_hash)
+                            logging.info("[Download] Updated refs/main to: %s", revision_hash)
+
+                            # Download each file
+                            files_to_download = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
+                            for filename in files_to_download:
+                                file_path = os.path.join(snapshot_dir, filename)
+
+                                # Skip if already exists and complete
+                                if os.path.isfile(file_path):
+                                    file_size = os.path.getsize(file_path)
+                                    logging.info("[Download] File %s already exists (%.2f MB), skipping",
+                                               filename, file_size / (1024*1024))
+                                    continue
+
+                                # Get download URL
+                                url = hf_hub_url(repo_id=repo_id, filename=filename, revision=revision_hash)
+                                logging.info("[Download] Downloading %s from %s", filename, url)
+
+                                # Download with streaming and progress
+                                with requests.get(url, stream=True, timeout=60, verify=certifi.where()) as r:
+                                    r.raise_for_status()
+                                    total_size = int(r.headers.get('content-length', 0))
+                                    logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024*1024))
+
+                                    downloaded = 0
+                                    with open(file_path, 'wb') as f:
+                                        for chunk in r.iter_content(chunk_size=8192):
+                                            if chunk:
+                                                f.write(chunk)
+                                                downloaded += len(chunk)
+                                                if downloaded % (1024*1024) == 0:  # Log every MB
+                                                    pct = (downloaded / total_size * 100) if total_size else 0
+                                                    logging.info("[Download] %s: %.2f MB / %.2f MB (%.1f%%)",
+                                                               filename, downloaded / (1024*1024),
+                                                               total_size / (1024*1024), pct)
+
+                                    final_size = os.path.getsize(file_path)
+                                    logging.info("[Download] Completed %s: %.2f MB written",
+                                               filename, final_size / (1024*1024))
+
+                            snapshot_path = snapshot_dir
+                            download_success = True
+                            logging.info("[Download] Manual download completed successfully: %s", snapshot_path)
+
+                        except Exception as manual_err:
+                            logging.error("[Download] Manual download failed: %s", str(manual_err), exc_info=True)
+                            snapshot_path = None
+                            download_success = False
+
+                    # Fallback to snapshot_download if manual download not attempted or failed
+                    if not download_success:
+                        logging.info("[Download] Using snapshot_download (non-Windows or manual failed)")
+                        try:
+                            # Wrap in thread with timeout to prevent indefinite hangs
+                            import threading
+                            result_container: List[Optional[str]] = [None]
+                            error_container: List[Optional[Exception]] = [None]
+
+                            def _download_with_snapshot():
+                                try:
+                                    result_container[0] = snapshot_download(
+                                        repo_id=f"Systran/faster-whisper-{remote_short}",
+                                        cache_dir=cache_dir,
+                                        local_files_only=False,
+                                        allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
+                                        max_workers=1,
+                                        local_dir_use_symlinks=False,
+                                        revision="main",
+                                        resume_download=True,
+                                    )
+                                except Exception as e:
+                                    error_container[0] = e
+
+                            download_thread = threading.Thread(target=_download_with_snapshot, name="SnapshotDL")
+                            download_thread.start()
+                            download_thread.join(timeout=120)  # 2 minute timeout
+
+                            if download_thread.is_alive():
+                                logging.error("[Download] snapshot_download timed out after 120s")
+                                raise TimeoutError("Model download exceeded 2 minutes - possible network or AV interference")
+
+                            if error_container[0] is not None:
+                                raise error_container[0]
+
+                            snapshot_path = result_container[0]
+                            logging.info("[Download] snapshot_download completed: %s", snapshot_path)
+
+                        except Exception as snap_err:
+                            logging.error("[Download] snapshot_download failed: %s", str(snap_err), exc_info=True)
+                            raise
+
                     logging.info("[Trace] RETURN snapshot_download call")
                     # Stop monitor
                     try:
@@ -255,31 +393,36 @@ class Transcriber:
                             hb_thread.join(timeout=5)
                     except Exception:
                         pass
-                    logging.info("[Download] snapshot_download returned path: %s", snapshot_path)
-                    logging.info("[FileSystem] Snapshot path exists: %s", os.path.exists(snapshot_path))
-                    logging.info("[FileSystem] Snapshot path is directory: %s", os.path.isdir(snapshot_path))
 
-                    # Verify contents and set as model_id
-                    if os.path.isdir(snapshot_path):
-                        if _looks_like_ct2_dir(snapshot_path):
-                            model_id = snapshot_path
-                            logging.info("[ModelInit] Downloaded snapshot is valid CT2 dir: %s", model_id)
-                            os.environ["HF_HUB_OFFLINE"] = "1"  # after prefetch, prefer offline
-                        else:
-                            logging.info("[ModelInit] Snapshot root is not CT2 dir, searching subdirectories")
-                            # Sometimes snapshot_download returns root; find CT2 folder inside
-                            found_ct2 = False
-                            for root, dirs, files in os.walk(snapshot_path):
-                                logging.debug("[FileSystem] Walking: %s (dirs: %s, files: %d)",
-                                            root, dirs[:5], len(files))
-                                if _looks_like_ct2_dir(root):
-                                    model_id = root
-                                    logging.info("[ModelInit] Found CT2 dir inside snapshot: %s", model_id)
-                                    os.environ["HF_HUB_OFFLINE"] = "1"
-                                    found_ct2 = True
-                                    break
-                            if not found_ct2:
-                                logging.warning("[ModelInit] No CT2 dir found in downloaded snapshot, using remote id")
+                    if snapshot_path:
+                        logging.info("[Download] snapshot_download returned path: %s", snapshot_path)
+                        logging.info("[FileSystem] Snapshot path exists: %s", os.path.exists(snapshot_path))
+                        logging.info("[FileSystem] Snapshot path is directory: %s", os.path.isdir(snapshot_path))
+
+                        # Verify contents and set as model_id
+                        if os.path.isdir(snapshot_path):
+                            if _looks_like_ct2_dir(snapshot_path):
+                                model_id = snapshot_path
+                                logging.info("[ModelInit] Downloaded snapshot is valid CT2 dir: %s", model_id)
+                                os.environ["HF_HUB_OFFLINE"] = "1"  # after prefetch, prefer offline
+                            else:
+                                logging.info("[ModelInit] Snapshot root is not CT2 dir, searching subdirectories")
+                                # Sometimes snapshot_download returns root; find CT2 folder inside
+                                found_ct2 = False
+                                for root, dirs, files in os.walk(snapshot_path):
+                                    logging.debug("[FileSystem] Walking: %s (dirs: %s, files: %d)",
+                                                root, dirs[:5], len(files))
+                                    if _looks_like_ct2_dir(root):
+                                        model_id = root
+                                        logging.info("[ModelInit] Found CT2 dir inside snapshot: %s", model_id)
+                                        os.environ["HF_HUB_OFFLINE"] = "1"
+                                        found_ct2 = True
+                                        break
+                                if not found_ct2:
+                                    logging.warning("[ModelInit] No CT2 dir found in downloaded snapshot, using remote id")
+                    else:
+                        logging.error("[Download] snapshot_path is None after download")
+
                     # If still not set, fall back to remote id
                     if 'model_id' not in locals():
                         logging.warning("[ModelInit] model_id not set after download, falling back to remote")
