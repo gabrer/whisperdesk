@@ -144,7 +144,9 @@ class Transcriber:
                 try:
                     if progress_callback:
                         progress_callback("Preparing model download…", 0)
+                    logging.info("[Trace] BEFORE import snapshot_download")
                     from huggingface_hub import snapshot_download  # type: ignore
+                    logging.info("[Trace] AFTER import snapshot_download")
                     cache_dir = hf_cache_root()
                     logging.info("[Download] Starting snapshot_download to cache_dir: %s", cache_dir)
                     logging.info("[Download] repo_id: Systran/faster-whisper-%s", remote_short)
@@ -162,22 +164,39 @@ class Transcriber:
 
                             def _monitor_cache_growth():
                                 last_bytes = -1
+                                last_path = None
                                 while not monitor_stop.is_set():
                                     total = 0
+                                    newest_path = None
+                                    newest_mtime = -1.0
                                     try:
                                         if os.path.isdir(target_repo_dir):
                                             for dirpath, _, filenames in os.walk(target_repo_dir):
                                                 for fn in filenames:
                                                     fp = os.path.join(dirpath, fn)
                                                     try:
-                                                        total += os.path.getsize(fp)
+                                                        sz = os.path.getsize(fp)
+                                                        total += sz
+                                                        mt = os.path.getmtime(fp)
+                                                        if mt > newest_mtime:
+                                                            newest_mtime = mt
+                                                            newest_path = fp
                                                     except Exception:
                                                         pass
                                     except Exception:
                                         pass
                                     if total != last_bytes:
-                                        logging.info("[Download] Cache size under %s: %.2f MB", target_repo_dir, total / (1024*1024))
+                                        if newest_path and newest_path != last_path:
+                                            try:
+                                                logging.info("[Download] Cache size under %s: %.2f MB (latest file: %s size=%.2f MB)",
+                                                             target_repo_dir, total / (1024*1024), newest_path, (os.path.getsize(newest_path) / (1024*1024)))
+                                            except Exception:
+                                                logging.info("[Download] Cache size under %s: %.2f MB (latest file: %s)",
+                                                             target_repo_dir, total / (1024*1024), newest_path)
+                                        else:
+                                            logging.info("[Download] Cache size under %s: %.2f MB", target_repo_dir, total / (1024*1024))
                                         last_bytes = total
+                                        last_path = newest_path
                                     monitor_stop.wait(15.0)
 
                             monitor_thread = threading.Thread(target=_monitor_cache_growth, name="DLMonitor", daemon=True)
@@ -185,6 +204,28 @@ class Transcriber:
                     except Exception as mon_err:
                         logging.debug("[Download] Monitor not started: %s", str(mon_err))
 
+                    # Heartbeat: log while inside snapshot_download to pinpoint stalls
+                    hb_stop = None
+                    hb_thread = None
+                    try:
+                        import threading, time
+                        hb_stop = threading.Event()
+
+                        def _heartbeat():
+                            start_t = time.time()
+                            ix = 0
+                            while not hb_stop.is_set():
+                                elapsed = int(time.time() - start_t)
+                                logging.info("[Trace] Inside snapshot_download... %ds elapsed (tick %d)", elapsed, ix)
+                                ix += 1
+                                hb_stop.wait(5.0)
+
+                        hb_thread = threading.Thread(target=_heartbeat, name="DLHeartbeat", daemon=True)
+                        hb_thread.start()
+                    except Exception as _:
+                        pass
+
+                    logging.info("[Trace] ENTER snapshot_download call")
                     # Honor env timeout if set; otherwise default to 60s per request via env set in app.py
                     # Limit worker threads to 1 to reduce file contention on Windows
                     snapshot_path = snapshot_download(
@@ -197,12 +238,21 @@ class Transcriber:
                         revision="main",
                         resume_download=True,
                     )
+                    logging.info("[Trace] RETURN snapshot_download call")
                     # Stop monitor
                     try:
                         if monitor_stop is not None:
                             monitor_stop.set()
                         if monitor_thread is not None:
                             monitor_thread.join(timeout=5)
+                    except Exception:
+                        pass
+                    # Stop heartbeat
+                    try:
+                        if hb_stop is not None:
+                            hb_stop.set()
+                        if hb_thread is not None:
+                            hb_thread.join(timeout=5)
                     except Exception:
                         pass
                     logging.info("[Download] snapshot_download returned path: %s", snapshot_path)
