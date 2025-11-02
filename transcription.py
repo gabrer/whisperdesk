@@ -255,144 +255,176 @@ class Transcriber:
                     snapshot_path: Optional[str] = None
                     download_success = False
 
-                    if platform.system() == "Windows":
-                        logging.info("[Download] Using manual file-by-file downloader on Windows")
-                        try:
-                            import requests
-                            from huggingface_hub import hf_hub_url
-                            import certifi
+                    try:
+                        if platform.system() == "Windows":
+                            logging.info("[Download] Using manual file-by-file downloader on Windows")
+                            try:
+                                # Prefer requests if available; otherwise fall back to httpx
+                                try:
+                                    import requests  # type: ignore
+                                    http_impl = "requests"
+                                except Exception:
+                                    import httpx  # type: ignore
+                                    http_impl = "httpx"
 
-                            # Create snapshot directory structure
-                            repo_id = f"Systran/faster-whisper-{remote_short}"
+                                from huggingface_hub import hf_hub_url  # type: ignore
+                                import certifi  # type: ignore
 
-                            # Get revision hash first
-                            api_url = f"https://huggingface.co/api/models/{repo_id}/revision/main"
-                            logging.info("[Download] Fetching revision info from: %s", api_url)
-                            rev_resp = requests.get(api_url, timeout=30, verify=certifi.where())
-                            rev_resp.raise_for_status()
-                            revision_hash = rev_resp.json().get("sha", "main")
-                            logging.info("[Download] Resolved revision hash: %s", revision_hash)
+                                # Create snapshot directory structure
+                                repo_id = f"Systran/faster-whisper-{remote_short}"
 
-                            # Create snapshot directory
-                            repo_cache_dir = os.path.join(cache_dir, f"models--Systran--faster-whisper-{remote_short}")
-                            snapshot_dir = os.path.join(repo_cache_dir, "snapshots", revision_hash)
-                            os.makedirs(snapshot_dir, exist_ok=True)
-                            logging.info("[Download] Created snapshot directory: %s", snapshot_dir)
+                                # Get revision hash first
+                                api_url = f"https://huggingface.co/api/models/{repo_id}/revision/main"
+                                logging.info("[Download] Fetching revision info from: %s (via %s)", api_url, http_impl)
+                                if http_impl == "requests":
+                                    rev_resp = requests.get(api_url, timeout=30, verify=certifi.where())
+                                    rev_resp.raise_for_status()
+                                    rev_json = rev_resp.json()
+                                else:
+                                    with httpx.Client(verify=certifi.where(), timeout=30) as client:
+                                        rev_resp = client.get(api_url)
+                                        rev_resp.raise_for_status()
+                                        rev_json = rev_resp.json()
+                                revision_hash = rev_json.get("sha", "main")
+                                logging.info("[Download] Resolved revision hash: %s", revision_hash)
 
-                            # Update refs/main
-                            refs_dir = os.path.join(repo_cache_dir, "refs")
-                            os.makedirs(refs_dir, exist_ok=True)
-                            main_ref = os.path.join(refs_dir, "main")
-                            with open(main_ref, 'w') as f:
-                                f.write(revision_hash)
-                            logging.info("[Download] Updated refs/main to: %s", revision_hash)
+                                # Create snapshot directory
+                                repo_cache_dir = os.path.join(cache_dir, f"models--Systran--faster-whisper-{remote_short}")
+                                snapshot_dir = os.path.join(repo_cache_dir, "snapshots", revision_hash)
+                                os.makedirs(snapshot_dir, exist_ok=True)
+                                logging.info("[Download] Created snapshot directory: %s", snapshot_dir)
 
-                            # Download each file
-                            files_to_download = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
-                            for filename in files_to_download:
-                                file_path = os.path.join(snapshot_dir, filename)
+                                # Update refs/main
+                                refs_dir = os.path.join(repo_cache_dir, "refs")
+                                os.makedirs(refs_dir, exist_ok=True)
+                                main_ref = os.path.join(refs_dir, "main")
+                                with open(main_ref, 'w', encoding='utf-8') as f:
+                                    f.write(revision_hash)
+                                logging.info("[Download] Updated refs/main to: %s", revision_hash)
 
-                                # Skip if already exists and complete
-                                if os.path.isfile(file_path):
-                                    file_size = os.path.getsize(file_path)
-                                    logging.info("[Download] File %s already exists (%.2f MB), skipping",
-                                               filename, file_size / (1024*1024))
-                                    continue
+                                # Download each file
+                                files_to_download = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
+                                for filename in files_to_download:
+                                    file_path = os.path.join(snapshot_dir, filename)
 
-                                # Get download URL
-                                url = hf_hub_url(repo_id=repo_id, filename=filename, revision=revision_hash)
-                                logging.info("[Download] Downloading %s from %s", filename, url)
+                                    # Skip if already exists and complete
+                                    if os.path.isfile(file_path):
+                                        file_size = os.path.getsize(file_path)
+                                        logging.info("[Download] File %s already exists (%.2f MB), skipping",
+                                                   filename, file_size / (1024*1024))
+                                        continue
 
-                                # Download with streaming and progress
-                                with requests.get(url, stream=True, timeout=60, verify=certifi.where()) as r:
-                                    r.raise_for_status()
-                                    total_size = int(r.headers.get('content-length', 0))
-                                    logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024*1024))
+                                    # Get download URL
+                                    url = hf_hub_url(repo_id=repo_id, filename=filename, revision=revision_hash)
+                                    logging.info("[Download] Downloading %s from %s via %s", filename, url, http_impl)
 
-                                    downloaded = 0
-                                    with open(file_path, 'wb') as f:
-                                        for chunk in r.iter_content(chunk_size=8192):
-                                            if chunk:
-                                                f.write(chunk)
-                                                downloaded += len(chunk)
-                                                if downloaded % (1024*1024) == 0:  # Log every MB
-                                                    pct = (downloaded / total_size * 100) if total_size else 0
-                                                    logging.info("[Download] %s: %.2f MB / %.2f MB (%.1f%%)",
-                                                               filename, downloaded / (1024*1024),
-                                                               total_size / (1024*1024), pct)
+                                    # Download with streaming and progress
+                                    if http_impl == "requests":
+                                        with requests.get(url, stream=True, timeout=60, verify=certifi.where()) as r:  # type: ignore
+                                            r.raise_for_status()
+                                            total_size = int(r.headers.get('content-length', 0))
+                                            logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024*1024))
+                                            downloaded = 0
+                                            with open(file_path, 'wb') as f:
+                                                for chunk in r.iter_content(chunk_size=8192):
+                                                    if chunk:
+                                                        f.write(chunk)
+                                                        downloaded += len(chunk)
+                                                        if downloaded % (1024*1024) == 0:  # Log every MB
+                                                            pct = (downloaded / total_size * 100) if total_size else 0
+                                                            logging.info("[Download] %s: %.2f MB / %.2f MB (%.1f%%)",
+                                                                       filename, downloaded / (1024*1024),
+                                                                       total_size / (1024*1024), pct)
+                                    else:
+                                        with httpx.Client(verify=certifi.where(), timeout=60) as client:  # type: ignore
+                                            with client.stream("GET", url) as r:
+                                                r.raise_for_status()
+                                                total_size = int(r.headers.get('content-length', 0))
+                                                logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024*1024))
+                                                downloaded = 0
+                                                with open(file_path, 'wb') as f:
+                                                    for chunk in r.iter_bytes():
+                                                        if chunk:
+                                                            f.write(chunk)
+                                                            downloaded += len(chunk)
+                                                            if downloaded % (1024*1024) == 0:
+                                                                pct = (downloaded / total_size * 100) if total_size else 0
+                                                                logging.info("[Download] %s: %.2f MB / %.2f MB (%.1f%%)",
+                                                                               filename, downloaded / (1024*1024),
+                                                                               total_size / (1024*1024), pct)
 
                                     final_size = os.path.getsize(file_path)
                                     logging.info("[Download] Completed %s: %.2f MB written",
                                                filename, final_size / (1024*1024))
 
-                            snapshot_path = snapshot_dir
-                            download_success = True
-                            logging.info("[Download] Manual download completed successfully: %s", snapshot_path)
+                                snapshot_path = snapshot_dir
+                                download_success = True
+                                logging.info("[Download] Manual download completed successfully: %s", snapshot_path)
 
-                        except Exception as manual_err:
-                            logging.error("[Download] Manual download failed: %s", str(manual_err), exc_info=True)
-                            snapshot_path = None
-                            download_success = False
+                            except Exception as manual_err:
+                                logging.error("[Download] Manual download failed: %s", str(manual_err), exc_info=True)
+                                snapshot_path = None
+                                download_success = False
 
-                    # Fallback to snapshot_download if manual download not attempted or failed
-                    if not download_success:
-                        logging.info("[Download] Using snapshot_download (non-Windows or manual failed)")
+                        # Fallback to snapshot_download if manual download not attempted or failed
+                        if not download_success:
+                            logging.info("[Download] Using snapshot_download (non-Windows or manual failed)")
+                            try:
+                                # Wrap in thread with timeout to prevent indefinite hangs
+                                import threading
+                                result_container: List[Optional[str]] = [None]
+                                error_container: List[Optional[Exception]] = [None]
+
+                                def _download_with_snapshot():
+                                    try:
+                                        result_container[0] = snapshot_download(
+                                            repo_id=f"Systran/faster-whisper-{remote_short}",
+                                            cache_dir=cache_dir,
+                                            local_files_only=False,
+                                            allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
+                                            max_workers=1,
+                                            local_dir_use_symlinks=False,
+                                            revision="main",
+                                            resume_download=True,
+                                        )
+                                    except Exception as e:
+                                        error_container[0] = e
+
+                                download_thread = threading.Thread(target=_download_with_snapshot, name="SnapshotDL")
+                                download_thread.start()
+                                download_thread.join(timeout=120)  # 2 minute timeout
+
+                                if download_thread.is_alive():
+                                    logging.error("[Download] snapshot_download timed out after 120s")
+                                    raise TimeoutError("Model download exceeded 2 minutes - possible network or AV interference")
+
+                                if error_container[0] is not None:
+                                    raise error_container[0]
+
+                                snapshot_path = result_container[0]
+                                logging.info("[Download] snapshot_download completed: %s", snapshot_path)
+
+                            except Exception as snap_err:
+                                logging.error("[Download] snapshot_download failed: %s", str(snap_err), exc_info=True)
+                                raise
+                    finally:
+                        logging.info("[Trace] RETURN snapshot_download call")
+                        # Stop monitor
                         try:
-                            # Wrap in thread with timeout to prevent indefinite hangs
-                            import threading
-                            result_container: List[Optional[str]] = [None]
-                            error_container: List[Optional[Exception]] = [None]
-
-                            def _download_with_snapshot():
-                                try:
-                                    result_container[0] = snapshot_download(
-                                        repo_id=f"Systran/faster-whisper-{remote_short}",
-                                        cache_dir=cache_dir,
-                                        local_files_only=False,
-                                        allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
-                                        max_workers=1,
-                                        local_dir_use_symlinks=False,
-                                        revision="main",
-                                        resume_download=True,
-                                    )
-                                except Exception as e:
-                                    error_container[0] = e
-
-                            download_thread = threading.Thread(target=_download_with_snapshot, name="SnapshotDL")
-                            download_thread.start()
-                            download_thread.join(timeout=120)  # 2 minute timeout
-
-                            if download_thread.is_alive():
-                                logging.error("[Download] snapshot_download timed out after 120s")
-                                raise TimeoutError("Model download exceeded 2 minutes - possible network or AV interference")
-
-                            if error_container[0] is not None:
-                                raise error_container[0]
-
-                            snapshot_path = result_container[0]
-                            logging.info("[Download] snapshot_download completed: %s", snapshot_path)
-
-                        except Exception as snap_err:
-                            logging.error("[Download] snapshot_download failed: %s", str(snap_err), exc_info=True)
-                            raise
-
-                    logging.info("[Trace] RETURN snapshot_download call")
-                    # Stop monitor
-                    try:
-                        if monitor_stop is not None:
-                            monitor_stop.set()
-                        if monitor_thread is not None:
-                            monitor_thread.join(timeout=5)
-                    except Exception:
-                        pass
-                    # Stop heartbeat
-                    try:
-                        if hb_stop is not None:
-                            hb_stop.set()
-                        if hb_thread is not None:
-                            hb_thread.join(timeout=5)
-                    except Exception:
-                        pass
+                            if monitor_stop is not None:
+                                monitor_stop.set()
+                            if monitor_thread is not None:
+                                monitor_thread.join(timeout=5)
+                        except Exception:
+                            pass
+                        # Stop heartbeat
+                        try:
+                            if hb_stop is not None:
+                                hb_stop.set()
+                            if hb_thread is not None:
+                                hb_thread.join(timeout=5)
+                        except Exception:
+                            pass
 
                     if snapshot_path:
                         logging.info("[Download] snapshot_download returned path: %s", snapshot_path)
