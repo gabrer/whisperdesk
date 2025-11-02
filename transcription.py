@@ -281,8 +281,8 @@ class Transcriber:
                                     rev_resp.raise_for_status()
                                     rev_json = rev_resp.json()
                                 else:
-                                    with httpx.Client(verify=certifi.where(), timeout=30) as client:
-                                        rev_resp = client.get(api_url)
+                                    with httpx.Client(verify=certifi.where(), timeout=30, follow_redirects=True) as client:
+                                        rev_resp = client.get(api_url, follow_redirects=True)
                                         rev_resp.raise_for_status()
                                         rev_json = rev_resp.json()
                                 revision_hash = rev_json.get("sha", "main")
@@ -336,8 +336,8 @@ class Transcriber:
                                                                        filename, downloaded / (1024*1024),
                                                                        total_size / (1024*1024), pct)
                                     else:
-                                        with httpx.Client(verify=certifi.where(), timeout=60) as client:  # type: ignore
-                                            with client.stream("GET", url) as r:
+                                        with httpx.Client(verify=certifi.where(), timeout=60, follow_redirects=True) as client:  # type: ignore
+                                            with client.stream("GET", url, follow_redirects=True) as r:
                                                 r.raise_for_status()
                                                 total_size = int(r.headers.get('content-length', 0))
                                                 logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024*1024))
