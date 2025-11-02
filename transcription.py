@@ -151,6 +151,40 @@ class Transcriber:
                     logging.info("[Download] local_dir_use_symlinks: False (Windows compatibility)")
                     logging.info("[Download] max_workers: 1 (reduce file contention)")
 
+                    # Start a lightweight monitor on Windows to log cache growth during download
+                    monitor_stop = None
+                    monitor_thread = None
+                    try:
+                        if platform.system() == "Windows":
+                            import threading, time
+                            monitor_stop = threading.Event()
+                            target_repo_dir = os.path.join(cache_dir, f"models--Systran--faster-whisper-{remote_short}")
+
+                            def _monitor_cache_growth():
+                                last_bytes = -1
+                                while not monitor_stop.is_set():
+                                    total = 0
+                                    try:
+                                        if os.path.isdir(target_repo_dir):
+                                            for dirpath, _, filenames in os.walk(target_repo_dir):
+                                                for fn in filenames:
+                                                    fp = os.path.join(dirpath, fn)
+                                                    try:
+                                                        total += os.path.getsize(fp)
+                                                    except Exception:
+                                                        pass
+                                    except Exception:
+                                        pass
+                                    if total != last_bytes:
+                                        logging.info("[Download] Cache size under %s: %.2f MB", target_repo_dir, total / (1024*1024))
+                                        last_bytes = total
+                                    monitor_stop.wait(15.0)
+
+                            monitor_thread = threading.Thread(target=_monitor_cache_growth, name="DLMonitor", daemon=True)
+                            monitor_thread.start()
+                    except Exception as mon_err:
+                        logging.debug("[Download] Monitor not started: %s", str(mon_err))
+
                     # Honor env timeout if set; otherwise default to 60s per request via env set in app.py
                     # Limit worker threads to 1 to reduce file contention on Windows
                     snapshot_path = snapshot_download(
@@ -163,6 +197,14 @@ class Transcriber:
                         revision="main",
                         resume_download=True,
                     )
+                    # Stop monitor
+                    try:
+                        if monitor_stop is not None:
+                            monitor_stop.set()
+                        if monitor_thread is not None:
+                            monitor_thread.join(timeout=5)
+                    except Exception:
+                        pass
                     logging.info("[Download] snapshot_download returned path: %s", snapshot_path)
                     logging.info("[FileSystem] Snapshot path exists: %s", os.path.exists(snapshot_path))
                     logging.info("[FileSystem] Snapshot path is directory: %s", os.path.isdir(snapshot_path))

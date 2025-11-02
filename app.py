@@ -1031,8 +1031,9 @@ def main():
     logging.info("[FileSystem] models_root exists: %s", os.path.exists(models_root()))
     logging.info("[FileSystem] Current working directory: %s", os.getcwd())
 
-    if hasattr(sys, '_MEIPASS'):
-        logging.info("[Startup] Running as PyInstaller bundle, _MEIPASS: %s", sys._MEIPASS)
+    _meipass = getattr(sys, "_MEIPASS", None)
+    if _meipass:
+        logging.info("[Startup] Running as PyInstaller bundle, _MEIPASS: %s", _meipass)
     else:
         logging.info("[Startup] Running as normal Python script")
 
