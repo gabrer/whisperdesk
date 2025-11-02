@@ -44,19 +44,39 @@ def hf_cache_root() -> str:
     try:
         if system == "Windows":
             base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~\\AppData\\Local")
+            logging.info("[FileSystem] Windows detected - LOCALAPPDATA=%s, base=%s",
+                        os.environ.get("LOCALAPPDATA", "NOT_SET"), base)
             cache_dir = os.path.join(base, "WhisperDesk", "hf-cache")
         elif system == "Darwin":  # macOS
             base = os.path.expanduser("~/Library/Caches")
+            logging.info("[FileSystem] macOS detected - base=%s", base)
             cache_dir = os.path.join(base, "WhisperDesk", "hf-cache")
         else:  # Linux and others
             base = os.path.expanduser("~/.cache")
+            logging.info("[FileSystem] Linux/other detected - base=%s", base)
             cache_dir = os.path.join(base, "WhisperDesk", "hf-cache")
+
+        logging.info("[FileSystem] Computed HF cache directory: %s", cache_dir)
+        logging.info("[FileSystem] Cache directory exists: %s", os.path.exists(cache_dir))
+
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
+
+        logging.info("[FileSystem] Created/verified cache directory: %s", cache_dir)
+        logging.info("[FileSystem] Cache directory is writable: %s", os.access(cache_dir, os.W_OK))
+        logging.info("[FileSystem] Cache directory is readable: %s", os.access(cache_dir, os.R_OK))
+
         return cache_dir
-    except Exception:
+    except Exception as e:
         # Fallback to app-local cache if anything goes wrong
+        logging.error("[FileSystem] Failed to create user cache directory: %s", str(e), exc_info=True)
         fallback = os.path.join(app_root(), "hf-cache")
-        Path(fallback).mkdir(parents=True, exist_ok=True)
+        logging.warning("[FileSystem] Falling back to app-local cache: %s", fallback)
+        try:
+            Path(fallback).mkdir(parents=True, exist_ok=True)
+            logging.info("[FileSystem] Created fallback cache directory: %s", fallback)
+            logging.info("[FileSystem] Fallback cache is writable: %s", os.access(fallback, os.W_OK))
+        except Exception as e2:
+            logging.error("[FileSystem] Failed to create fallback cache: %s", str(e2), exc_info=True)
         return fallback
 
 

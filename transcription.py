@@ -59,16 +59,27 @@ class Transcriber:
         def _looks_like_ct2_dir(path: str) -> bool:
             required = ["config.json", "tokenizer.json", "vocabulary.txt", "model.bin"]
             try:
-                return all(os.path.isfile(os.path.join(path, f)) for f in required)
-            except Exception:
+                logging.debug("[FileSystem] Checking if %s looks like CT2 dir", path)
+                result = all(os.path.isfile(os.path.join(path, f)) for f in required)
+                logging.debug("[FileSystem] %s is CT2 dir: %s", path, result)
+                return result
+            except Exception as e:
+                logging.warning("[FileSystem] Error checking CT2 dir %s: %s", path, str(e))
                 return False
 
         # Try 1: explicit local ct2 directory (e.g., models/whisper-small-ct2)
         model_id: str
+        logging.info("[ModelInit] Checking model_dir: %s", self.model_dir)
+        logging.info("[FileSystem] model_dir exists: %s", os.path.exists(self.model_dir))
+        logging.info("[FileSystem] model_dir is directory: %s", os.path.isdir(self.model_dir))
+
         if os.path.isdir(self.model_dir) and _looks_like_ct2_dir(self.model_dir):
             model_id = self.model_dir
+            logging.info("[ModelInit] Using local CT2 directory: %s", model_id)
             os.environ["HF_HUB_OFFLINE"] = "1"  # enforce offline usage
         else:
+            logging.info("[ModelInit] Local CT2 directory not found, searching caches")
+            logging.info("[ModelInit] Local CT2 directory not found, searching caches")
             # Try 2: locate HF snapshot in our models/ cache OR user HF cache and use it offline
             remote_short = to_remote_name(model_name)  # e.g., 'small', 'large-v2'
             org = "Systran"
@@ -78,30 +89,56 @@ class Transcriber:
                 os.path.join(models_root(), cache_dir_name, "snapshots"),
                 os.path.join(hf_cache_root(), cache_dir_name, "snapshots"),
             ]
+            logging.info("[ModelInit] Searching for cached snapshots in: %s", candidate_roots)
+
             local_snapshot_dir = None
             try:
                 for cache_root in candidate_roots:
+                    logging.info("[FileSystem] Checking cache root: %s", cache_root)
+                    logging.info("[FileSystem] Cache root exists: %s", os.path.exists(cache_root))
+                    logging.info("[FileSystem] Cache root is directory: %s", os.path.isdir(cache_root))
+
                     if os.path.isdir(cache_root):
                         # Pick the most recent snapshot folder that contains required files
+                        try:
+                            dir_contents = os.listdir(cache_root)
+                            logging.info("[FileSystem] Cache root contains %d items: %s",
+                                       len(dir_contents), dir_contents[:10])  # Log first 10 items
+                        except Exception as e:
+                            logging.error("[FileSystem] Failed to list cache_root %s: %s", cache_root, str(e))
+                            continue
+
                         candidates = [
-                            os.path.join(cache_root, d) for d in os.listdir(cache_root)
+                            os.path.join(cache_root, d) for d in dir_contents
                             if os.path.isdir(os.path.join(cache_root, d))
                         ]
+                        logging.info("[FileSystem] Found %d snapshot directories", len(candidates))
+
                         # Sort by modification time, newest first
-                        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                        try:
+                            candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                            logging.debug("[FileSystem] Sorted candidates by mtime")
+                        except Exception as e:
+                            logging.warning("[FileSystem] Failed to sort by mtime: %s", str(e))
+
                         for cand in candidates:
+                            logging.debug("[FileSystem] Checking candidate: %s", cand)
                             if _looks_like_ct2_dir(cand):
                                 local_snapshot_dir = cand
+                                logging.info("[ModelInit] Found valid snapshot: %s", cand)
                                 break
                     if local_snapshot_dir:
                         break
-            except Exception:
+            except Exception as e:
+                logging.error("[ModelInit] Error searching for cached snapshots: %s", str(e), exc_info=True)
                 local_snapshot_dir = None
 
             if local_snapshot_dir:
                 model_id = local_snapshot_dir
+                logging.info("[ModelInit] Using cached snapshot: %s", model_id)
                 os.environ["HF_HUB_OFFLINE"] = "1"
             else:
+                logging.info("[ModelInit] No cached snapshot found, will download from HuggingFace")
                 # Fallback to remote id (online) — but prefetch via huggingface_hub to avoid internal hangs
                 # Use snapshot_download into our per-user cache with symlinks disabled
                 try:
@@ -109,6 +146,11 @@ class Transcriber:
                         progress_callback("Preparing model download…", 0)
                     from huggingface_hub import snapshot_download  # type: ignore
                     cache_dir = hf_cache_root()
+                    logging.info("[Download] Starting snapshot_download to cache_dir: %s", cache_dir)
+                    logging.info("[Download] repo_id: Systran/faster-whisper-%s", remote_short)
+                    logging.info("[Download] local_dir_use_symlinks: False (Windows compatibility)")
+                    logging.info("[Download] max_workers: 1 (reduce file contention)")
+
                     # Honor env timeout if set; otherwise default to 60s per request via env set in app.py
                     # Limit worker threads to 1 to reduce file contention on Windows
                     snapshot_path = snapshot_download(
@@ -121,24 +163,39 @@ class Transcriber:
                         revision="main",
                         resume_download=True,
                     )
+                    logging.info("[Download] snapshot_download returned path: %s", snapshot_path)
+                    logging.info("[FileSystem] Snapshot path exists: %s", os.path.exists(snapshot_path))
+                    logging.info("[FileSystem] Snapshot path is directory: %s", os.path.isdir(snapshot_path))
+
                     # Verify contents and set as model_id
                     if os.path.isdir(snapshot_path):
                         if _looks_like_ct2_dir(snapshot_path):
                             model_id = snapshot_path
+                            logging.info("[ModelInit] Downloaded snapshot is valid CT2 dir: %s", model_id)
                             os.environ["HF_HUB_OFFLINE"] = "1"  # after prefetch, prefer offline
                         else:
+                            logging.info("[ModelInit] Snapshot root is not CT2 dir, searching subdirectories")
                             # Sometimes snapshot_download returns root; find CT2 folder inside
+                            found_ct2 = False
                             for root, dirs, files in os.walk(snapshot_path):
+                                logging.debug("[FileSystem] Walking: %s (dirs: %s, files: %d)",
+                                            root, dirs[:5], len(files))
                                 if _looks_like_ct2_dir(root):
                                     model_id = root
+                                    logging.info("[ModelInit] Found CT2 dir inside snapshot: %s", model_id)
                                     os.environ["HF_HUB_OFFLINE"] = "1"
+                                    found_ct2 = True
                                     break
+                            if not found_ct2:
+                                logging.warning("[ModelInit] No CT2 dir found in downloaded snapshot, using remote id")
                     # If still not set, fall back to remote id
                     if 'model_id' not in locals():
+                        logging.warning("[ModelInit] model_id not set after download, falling back to remote")
                         model_id = remote_short
                         os.environ.pop("HF_HUB_OFFLINE", None)
                 except Exception as prefetch_err:
-                    logging.warning("[ModelInit] snapshot_download failed (%s); falling back to internal downloader", str(prefetch_err))
+                    logging.error("[ModelInit] snapshot_download failed: %s", str(prefetch_err), exc_info=True)
+                    logging.warning("[ModelInit] Falling back to internal downloader with remote id")
                     model_id = remote_short
                     os.environ.pop("HF_HUB_OFFLINE", None)
 

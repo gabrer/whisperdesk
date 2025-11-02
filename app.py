@@ -857,32 +857,47 @@ class MainWindow(QWidget):
                 if self.file_list.count() > 0:
                     first_file = self.file_list.item(0).text()
                     output_dir = os.path.dirname(os.path.abspath(first_file))
+                    logging.info("[FileSystem] Using first file's directory as output: %s", output_dir)
                 else:
                     output_dir = app_root()
+                    logging.info("[FileSystem] Using app_root as output: %s", output_dir)
             else:
                 # Make absolute if relative
                 if not os.path.isabs(output_dir):
                     output_dir = os.path.abspath(output_dir)
+                logging.info("[FileSystem] Using configured output directory: %s", output_dir)
 
             # Create directory if it doesn't exist
-            if not os.path.isdir(output_dir):
-                os.makedirs(output_dir, exist_ok=True)
+            logging.info("[FileSystem] Output directory exists: %s", os.path.exists(output_dir))
+            logging.info("[FileSystem] Output directory is dir: %s", os.path.isdir(output_dir))
 
+            if not os.path.isdir(output_dir):
+                logging.info("[FileSystem] Creating output directory: %s", output_dir)
+                os.makedirs(output_dir, exist_ok=True)
+                logging.info("[FileSystem] Output directory created successfully")
+
+            logging.info("[FileSystem] Output directory is writable: %s", os.access(output_dir, os.W_OK))
             # Use Qt to open folder cross-platform
             QDesktopServices.openUrl(QUrl.fromLocalFile(output_dir))
         except Exception as e:
-            logging.error("Failed to open output folder: %s", e)
+            logging.error("[FileSystem] Failed to open output folder: %s", str(e), exc_info=True)
             self.progress_label.setText(f"⚠️ Could not open output folder: {str(e)}")
 
     def open_logs(self):
         try:
             log_dir = os.path.dirname(self.log_path) if getattr(self, 'log_path', None) else os.path.join(app_root(), 'logs')
+            logging.info("[FileSystem] Opening log directory: %s", log_dir)
+            logging.info("[FileSystem] Log directory exists: %s", os.path.exists(log_dir))
+
             if not os.path.isdir(log_dir):
+                logging.info("[FileSystem] Creating log directory: %s", log_dir)
                 os.makedirs(log_dir, exist_ok=True)
+                logging.info("[FileSystem] Log directory created successfully")
+
             # Use Qt to open folder cross-platform
             QDesktopServices.openUrl(QUrl.fromLocalFile(log_dir))
         except Exception as e:
-            logging.error("Failed to open log folder: %s", e)
+            logging.error("[FileSystem] Failed to open log folder: %s", str(e), exc_info=True)
 
     def on_progress_update(self, msg: str, pct: int):
         self.progress_label.setText(msg)
@@ -972,18 +987,21 @@ def main():
     # This must be done at app startup, not in worker threads
     os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'
     os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '0'
+
     # Route HF cache to a per-user, writable location (fixes Windows frozen-app hangs)
     try:
         _hf_cache = hf_cache_root()
         os.environ['HF_HOME'] = _hf_cache
         os.environ['HUGGINGFACE_HUB_CACHE'] = _hf_cache
-    except Exception:
-        pass
+        logging.info("[Startup] HF cache configured: HF_HOME=%s", _hf_cache)
+    except Exception as e:
+        logging.error("[Startup] Failed to configure HF cache: %s", str(e), exc_info=True)
 
     # CRITICAL FIX for Windows PyInstaller builds:
     # Force httpx to use HTTP/1.1 instead of HTTP/2 which causes hangs on Windows
     # Also disable connection pooling which conflicts with Qt event loop
     if sys.platform == 'win32':
+        logging.info("[Startup] Detected Windows platform, applying Windows-specific settings")
         os.environ['HTTPX_DISABLE_HTTP2'] = '1'
         # Use requests library instead of httpx for downloads (more compatible with PyInstaller)
         os.environ['HF_HUB_ENABLE_REQUESTS'] = '1'
@@ -993,14 +1011,30 @@ def main():
         os.environ.setdefault('HF_HUB_HTTP_TIMEOUT', '60')
         os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
         os.environ['HF_HUB_ENABLE_TQDM'] = '0'
+        logging.info("[Startup] Windows HTTP/download settings: HTTP/2 disabled, symlinks disabled, timeout=60s")
+
         # Ensure SSL certificate bundle is available to requests/httpx
         try:
             import certifi  # type: ignore
             ca_file = certifi.where()
             os.environ['SSL_CERT_FILE'] = ca_file
             os.environ['REQUESTS_CA_BUNDLE'] = ca_file
-        except Exception:
-            pass
+            logging.info("[Startup] SSL certificates configured from certifi: %s", ca_file)
+            logging.info("[FileSystem] SSL cert file exists: %s", os.path.exists(ca_file))
+        except Exception as e:
+            logging.error("[Startup] Failed to configure SSL certificates: %s", str(e), exc_info=True)
+
+    # Log critical paths for debugging
+    logging.info("[Startup] app_root: %s", app_root())
+    logging.info("[Startup] models_root: %s", models_root())
+    logging.info("[FileSystem] app_root exists: %s", os.path.exists(app_root()))
+    logging.info("[FileSystem] models_root exists: %s", os.path.exists(models_root()))
+    logging.info("[FileSystem] Current working directory: %s", os.getcwd())
+
+    if hasattr(sys, '_MEIPASS'):
+        logging.info("[Startup] Running as PyInstaller bundle, _MEIPASS: %s", sys._MEIPASS)
+    else:
+        logging.info("[Startup] Running as normal Python script")
 
     setup_logging()    # Enable HiDPI support for sharp rendering on high-resolution displays
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
