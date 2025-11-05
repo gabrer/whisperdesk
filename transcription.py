@@ -79,11 +79,18 @@ class Transcriber:
 
         # Helper: check a directory contains expected CT2 files
         def _looks_like_ct2_dir(path: str) -> bool:
-            required = ["config.json", "tokenizer.json", "vocabulary.txt", "model.bin"]
+            """CT2 Whisper dir is valid if it has config.json, model.bin, and either tokenizer.json or vocabulary.txt."""
             try:
                 logging.debug("[FileSystem] Checking if %s looks like CT2 dir", path)
-                result = all(os.path.isfile(os.path.join(path, f)) for f in required)
-                logging.debug("[FileSystem] %s is CT2 dir: %s", path, result)
+                has_config = os.path.isfile(os.path.join(path, "config.json"))
+                has_model = os.path.isfile(os.path.join(path, "model.bin"))
+                has_tokenizer = os.path.isfile(os.path.join(path, "tokenizer.json"))
+                has_vocab = os.path.isfile(os.path.join(path, "vocabulary.txt"))
+                result = has_config and has_model and (has_tokenizer or has_vocab)
+                logging.debug(
+                    "[FileSystem] %s is CT2 dir: %s (config=%s, model=%s, tokenizer=%s, vocab=%s)",
+                    path, result, has_config, has_model, has_tokenizer, has_vocab
+                )
                 return result
             except Exception as e:
                 logging.warning("[FileSystem] Error checking CT2 dir %s: %s", path, str(e))
@@ -338,6 +345,7 @@ class Transcriber:
                                         rev_resp.raise_for_status()
                                         rev_json = rev_resp.json()
                                     else:
+                                        import httpx  # type: ignore
                                         with httpx.Client(verify=ca_bundle, timeout=30, follow_redirects=True) as client:  # type: ignore
                                             rev_resp = client.get(api_url, headers=headers, follow_redirects=True)
                                             if rev_resp.status_code in (401, 403):
@@ -350,6 +358,26 @@ class Transcriber:
                                     revision_hash = rev_json.get("sha", "main")
                                     logging.info("[Download] Resolved revision hash: %s", revision_hash)
 
+                                    # Query file list to decide which artifacts exist
+                                    files_api = f"https://huggingface.co/api/models/{repo_id}?expand=files"
+                                    try:
+                                        if http_impl == "requests":
+                                            files_resp = requests.get(files_api, timeout=30, verify=ca_bundle, headers=headers)  # type: ignore
+                                            files_resp.raise_for_status()
+                                            files_json = files_resp.json()
+                                        else:
+                                            import httpx  # type: ignore
+                                            with httpx.Client(verify=ca_bundle, timeout=30, follow_redirects=True) as client:  # type: ignore
+                                                files_resp = client.get(files_api, headers=headers, follow_redirects=True)
+                                                files_resp.raise_for_status()
+                                                files_json = files_resp.json()
+                                        siblings = files_json.get("siblings", []) or files_json.get("files", [])
+                                        available_names = {s.get("rfilename") or s.get("path") or s.get("filename") for s in siblings}
+                                        logging.info("[Download] Available repository files: %s", sorted([n for n in available_names if n]))
+                                    except Exception as e:
+                                        logging.warning("[Download] Could not fetch file list for %s: %s (will attempt defaults)", repo_id, str(e))
+                                        available_names = None
+
                                     snapshot_dir = os.path.join(repo_cache_dir, "snapshots", revision_hash)
                                     os.makedirs(snapshot_dir, exist_ok=True)
                                     logging.info("[Download] Prepared snapshot directory: %s", snapshot_dir)
@@ -361,7 +389,14 @@ class Transcriber:
                                         ref_fp.write(revision_hash)
                                     logging.info("[Download] Updated refs/main to: %s", revision_hash)
 
-                                    files_to_download = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
+                                    desired = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
+                                    if available_names:
+                                        files_to_download = [f for f in desired if f in available_names]
+                                        missing = [f for f in desired if f not in available_names]
+                                        if missing:
+                                            logging.info("[Download] Skipping missing files (not in repo): %s", missing)
+                                    else:
+                                        files_to_download = desired
                                     for filename in files_to_download:
                                         file_path = os.path.join(snapshot_dir, filename)
 
@@ -379,6 +414,9 @@ class Transcriber:
                                                     raise ManualDownloadAuthError(
                                                         "Authentication required to download model artifacts. Set HUGGINGFACE_HUB_TOKEN or WHISPERDESK_HF_TOKEN."
                                                     )
+                                                if r.status_code == 404:
+                                                    logging.warning("[Download] %s not found in repo %s, skipping", filename, repo_id)
+                                                    continue
                                                 r.raise_for_status()
                                                 total_size = int(r.headers.get("content-length", 0))
                                                 logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024 * 1024))
@@ -394,12 +432,16 @@ class Transcriber:
                                                                              filename, downloaded / (1024 * 1024),
                                                                              total_size / (1024 * 1024), pct)
                                         else:
+                                            import httpx  # type: ignore
                                             with httpx.Client(verify=ca_bundle, timeout=60, follow_redirects=True) as client:  # type: ignore
                                                 with client.stream("GET", url, headers=headers, follow_redirects=True) as r:
                                                     if r.status_code in (401, 403):
                                                         raise ManualDownloadAuthError(
                                                             "Authentication required to download model artifacts. Set HUGGINGFACE_HUB_TOKEN or WHISPERDESK_HF_TOKEN."
                                                         )
+                                                    if r.status_code == 404:
+                                                        logging.warning("[Download] %s not found in repo %s, skipping", filename, repo_id)
+                                                        continue
                                                     r.raise_for_status()
                                                     total_size = int(r.headers.get("content-length", 0))
                                                     logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024 * 1024))
@@ -460,7 +502,6 @@ class Transcriber:
                                             repo_id=repo_id,
                                             cache_dir=cache_dir,
                                             local_files_only=False,
-                                            allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
                                             max_workers=1,
                                             local_dir_use_symlinks=False,
                                             revision="main",
