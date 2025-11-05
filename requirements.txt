@@ -4,8 +4,9 @@
 PySide6>=6.7
 
 # Transcription
-faster-whisper>=1.0.0
-ctranslate2>=4.6.0
+# large-v3 models require faster-whisper 1.0.3+ (128 mel bins) and CT2 4.7+
+faster-whisper>=1.0.5
+ctranslate2>=4.7.0
 
 # Diarization
 onnxruntime>=1.16.0

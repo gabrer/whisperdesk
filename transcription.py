@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import platform
@@ -893,6 +894,7 @@ class Transcriber:
 
         # Stop download progress timer if it was started
         logging.info("[ModelInit] ============ MODEL LOAD COMPLETE ============")
+        self._validate_feature_size(model_id)
         logging.info("[ModelInit] Stopping download progress timer (active=%s, timer=%s)", download_progress_active, download_timer is not None)
         download_progress_active = False
         if download_timer:
@@ -944,3 +946,30 @@ class Transcriber:
             "duration": float(getattr(info, 'duration', 0.0)),
             "segments": out_segments
         }
+
+    def _validate_feature_size(self, model_dir: str) -> None:
+        """Raise a helpful error if the loaded model expects more mel bins than the runtime provides."""
+        try:
+            model_obj = getattr(self, "model", None)
+            if model_obj is None:
+                return
+            extractor = getattr(model_obj, "feature_extractor", None)
+            current_size = getattr(extractor, "feature_size", None)
+
+            required_size = None
+            if os.path.isdir(model_dir):
+                preproc_path = os.path.join(model_dir, "preprocessor_config.json")
+                if os.path.isfile(preproc_path):
+                    with open(preproc_path, "r", encoding="utf-8") as fh:
+                        preproc_data = json.load(fh)
+                        required_size = preproc_data.get("feature_size")
+
+            if required_size and current_size and required_size != current_size:
+                message = (
+                    "Whisper model requires {required} mel bins but faster-whisper is configured with {current}. "
+                    "Upgrade faster-whisper>=1.0.5 and ctranslate2>=4.7.0 to use Whisper v3 models."
+                ).format(required=required_size, current=current_size)
+                logging.error("[ModelInit] %s", message)
+                raise RuntimeError(message)
+        except Exception as exc:  # noqa: BLE001
+            logging.debug("[ModelInit] Feature size validation skipped: %s", exc)
