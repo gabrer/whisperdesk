@@ -1,7 +1,7 @@
 import logging
 import os
 import platform
-from typing import List, Dict, Any, Optional, TypedDict, Callable
+from typing import List, Dict, Any, Optional, TypedDict, Callable, Tuple
 
 # ...existing code...
 # Remove the top-level import to avoid failing during module import
@@ -33,9 +33,6 @@ class Transcriber:
                 "faster-whisper is not installed or failed to import. "
                 "Install dev deps: pip install -r requirements.txt"
             ) from e
-        # Resolve model path or remote id. Prefer fully local models (offline) when available.
-        self.model_dir = os.path.join(models_root(), model_name)
-
         def to_remote_name(dir_like: str) -> str:
             # Map folder-like names to faster-whisper ids
             mapping = {
@@ -55,6 +52,31 @@ class Transcriber:
             }
             return mapping.get(dir_like, dir_like)
 
+        def repo_candidates_for_remote(remote_short: str) -> List[str]:
+            """Return ordered repo_id candidates (org/repo) for a remote model name."""
+            overrides: Dict[str, List[str]] = {
+                # Newer large v3 turbo builds are hosted under mobiuslabsgmbh/dropbox mirrors.
+                "large-v3-turbo": [
+                    "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+                    "dropbox-dash/faster-whisper-large-v3-turbo",
+                ],
+            }
+            base_repo = f"Systran/faster-whisper-{remote_short}"
+            candidates = overrides.get(remote_short, []).copy()
+            if base_repo not in candidates:
+                candidates.append(base_repo)
+            return candidates
+
+        def split_repo_id(repo_id: str) -> Tuple[str, str]:
+            if "/" not in repo_id:
+                raise ValueError(f"Invalid repo_id '{repo_id}' (expected 'org/name')")
+            org, repo = repo_id.split("/", 1)
+            return org, repo
+
+        def cache_dir_name_for_repo(repo_id: str) -> str:
+            org, repo = split_repo_id(repo_id)
+            return f"models--{org}--{repo}"
+
         # Helper: check a directory contains expected CT2 files
         def _looks_like_ct2_dir(path: str) -> bool:
             required = ["config.json", "tokenizer.json", "vocabulary.txt", "model.bin"]
@@ -66,6 +88,13 @@ class Transcriber:
             except Exception as e:
                 logging.warning("[FileSystem] Error checking CT2 dir %s: %s", path, str(e))
                 return False
+
+        # Resolve model path or remote id. Prefer fully local models (offline) when available.
+        self.model_dir = os.path.join(models_root(), model_name)
+        remote_short = to_remote_name(model_name)
+        repo_candidates = repo_candidates_for_remote(remote_short)
+        download_repo_id: List[str] = [repo_candidates[0]]  # Mutable for closures
+        selected_repo_id: Optional[str] = None
 
         # Try 1: explicit local ct2 directory (e.g., models/whisper-small-ct2)
         model_id: str
@@ -79,54 +108,56 @@ class Transcriber:
             os.environ["HF_HUB_OFFLINE"] = "1"  # enforce offline usage
         else:
             logging.info("[ModelInit] Local CT2 directory not found, searching caches")
-            logging.info("[ModelInit] Local CT2 directory not found, searching caches")
             # Try 2: locate HF snapshot in our models/ cache OR user HF cache and use it offline
-            remote_short = to_remote_name(model_name)  # e.g., 'small', 'large-v2'
-            org = "Systran"
-            repo = f"faster-whisper-{remote_short}"
-            cache_dir_name = f"models--{org}--{repo}"
-            candidate_roots = [
-                os.path.join(models_root(), cache_dir_name, "snapshots"),
-                os.path.join(hf_cache_root(), cache_dir_name, "snapshots"),
-            ]
-            logging.info("[ModelInit] Searching for cached snapshots in: %s", candidate_roots)
-
             local_snapshot_dir = None
             try:
-                for cache_root in candidate_roots:
-                    logging.info("[FileSystem] Checking cache root: %s", cache_root)
-                    logging.info("[FileSystem] Cache root exists: %s", os.path.exists(cache_root))
-                    logging.info("[FileSystem] Cache root is directory: %s", os.path.isdir(cache_root))
+                for repo_id in repo_candidates:
+                    download_repo_id[0] = repo_id
+                    org, repo = split_repo_id(repo_id)
+                    cache_dir_name = cache_dir_name_for_repo(repo_id)
+                    candidate_roots = [
+                        os.path.join(models_root(), cache_dir_name, "snapshots"),
+                        os.path.join(hf_cache_root(), cache_dir_name, "snapshots"),
+                    ]
+                    logging.info("[ModelInit] Searching for cached snapshots for %s in: %s", repo_id, candidate_roots)
 
-                    if os.path.isdir(cache_root):
-                        # Pick the most recent snapshot folder that contains required files
-                        try:
-                            dir_contents = os.listdir(cache_root)
-                            logging.info("[FileSystem] Cache root contains %d items: %s",
-                                       len(dir_contents), dir_contents[:10])  # Log first 10 items
-                        except Exception as e:
-                            logging.error("[FileSystem] Failed to list cache_root %s: %s", cache_root, str(e))
-                            continue
+                    for cache_root in candidate_roots:
+                        logging.info("[FileSystem] Checking cache root: %s", cache_root)
+                        logging.info("[FileSystem] Cache root exists: %s", os.path.exists(cache_root))
+                        logging.info("[FileSystem] Cache root is directory: %s", os.path.isdir(cache_root))
 
-                        candidates = [
-                            os.path.join(cache_root, d) for d in dir_contents
-                            if os.path.isdir(os.path.join(cache_root, d))
-                        ]
-                        logging.info("[FileSystem] Found %d snapshot directories", len(candidates))
+                        if os.path.isdir(cache_root):
+                            # Pick the most recent snapshot folder that contains required files
+                            try:
+                                dir_contents = os.listdir(cache_root)
+                                logging.info("[FileSystem] Cache root contains %d items: %s",
+                                           len(dir_contents), dir_contents[:10])  # Log first 10 items
+                            except Exception as e:
+                                logging.error("[FileSystem] Failed to list cache_root %s: %s", cache_root, str(e))
+                                continue
 
-                        # Sort by modification time, newest first
-                        try:
-                            candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
-                            logging.debug("[FileSystem] Sorted candidates by mtime")
-                        except Exception as e:
-                            logging.warning("[FileSystem] Failed to sort by mtime: %s", str(e))
+                            candidates = [
+                                os.path.join(cache_root, d) for d in dir_contents
+                                if os.path.isdir(os.path.join(cache_root, d))
+                            ]
+                            logging.info("[FileSystem] Found %d snapshot directories", len(candidates))
 
-                        for cand in candidates:
-                            logging.debug("[FileSystem] Checking candidate: %s", cand)
-                            if _looks_like_ct2_dir(cand):
-                                local_snapshot_dir = cand
-                                logging.info("[ModelInit] Found valid snapshot: %s", cand)
-                                break
+                            # Sort by modification time, newest first
+                            try:
+                                candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                                logging.debug("[FileSystem] Sorted candidates by mtime")
+                            except Exception as e:
+                                logging.warning("[FileSystem] Failed to sort by mtime: %s", str(e))
+
+                            for cand in candidates:
+                                logging.debug("[FileSystem] Checking candidate: %s", cand)
+                                if _looks_like_ct2_dir(cand):
+                                    local_snapshot_dir = cand
+                                    selected_repo_id = repo_id
+                                    logging.info("[ModelInit] Found valid snapshot for %s: %s", repo_id, cand)
+                                    break
+                        if local_snapshot_dir:
+                            break
                     if local_snapshot_dir:
                         break
             except Exception as e:
@@ -135,6 +166,10 @@ class Transcriber:
 
             if local_snapshot_dir:
                 model_id = local_snapshot_dir
+                if selected_repo_id is None:
+                    selected_repo_id = download_repo_id[0]
+                else:
+                    download_repo_id[0] = selected_repo_id
                 logging.info("[ModelInit] Using cached snapshot: %s", model_id)
                 os.environ["HF_HUB_OFFLINE"] = "1"
             else:
@@ -149,15 +184,20 @@ class Transcriber:
                     logging.info("[Trace] AFTER import snapshot_download")
                     cache_dir = hf_cache_root()
                     logging.info("[Download] Starting snapshot_download to cache_dir: %s", cache_dir)
-                    logging.info("[Download] repo_id: Systran/faster-whisper-%s", remote_short)
+                    logging.info("[Download] repo candidates: %s", repo_candidates)
                     logging.info("[Download] local_dir_use_symlinks: False (Windows compatibility)")
                     logging.info("[Download] max_workers: 1 (reduce file contention)")
+                    hf_token = (
+                        os.environ.get("WHISPERDESK_HF_TOKEN")
+                        or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+                        or os.environ.get("HF_TOKEN")
+                    )
 
                     # Clean up incomplete downloads to avoid lock files and stale state
                     import shutil
-                    target_repo_dir = os.path.join(cache_dir, f"models--Systran--faster-whisper-{remote_short}")
-                    if os.path.isdir(target_repo_dir):
-                        snapshot_dir = os.path.join(target_repo_dir, "snapshots")
+                    for repo_id in repo_candidates:
+                        repo_cache_dir = os.path.join(cache_dir, cache_dir_name_for_repo(repo_id))
+                        snapshot_dir = os.path.join(repo_cache_dir, "snapshots")
                         if os.path.isdir(snapshot_dir):
                             logging.info("[Download] Checking for incomplete snapshots in: %s", snapshot_dir)
                             try:
@@ -183,8 +223,6 @@ class Transcriber:
                         if platform.system() == "Windows":
                             import threading, time
                             monitor_stop = threading.Event()
-                            target_repo_dir = os.path.join(cache_dir, f"models--Systran--faster-whisper-{remote_short}")
-
                             def _monitor_cache_growth():
                                 last_bytes = -1
                                 last_path = None
@@ -193,8 +231,9 @@ class Transcriber:
                                     newest_path = None
                                     newest_mtime = -1.0
                                     try:
-                                        if os.path.isdir(target_repo_dir):
-                                            for dirpath, _, filenames in os.walk(target_repo_dir):
+                                        current_repo_dir = os.path.join(cache_dir, cache_dir_name_for_repo(download_repo_id[0]))
+                                        if os.path.isdir(current_repo_dir):
+                                            for dirpath, _, filenames in os.walk(current_repo_dir):
                                                 for fn in filenames:
                                                     fp = os.path.join(dirpath, fn)
                                                     try:
@@ -209,15 +248,16 @@ class Transcriber:
                                     except Exception:
                                         pass
                                     if total != last_bytes:
+                                        current_repo_dir = os.path.join(cache_dir, cache_dir_name_for_repo(download_repo_id[0]))
                                         if newest_path and newest_path != last_path:
                                             try:
                                                 logging.info("[Download] Cache size under %s: %.2f MB (latest file: %s size=%.2f MB)",
-                                                             target_repo_dir, total / (1024*1024), newest_path, (os.path.getsize(newest_path) / (1024*1024)))
+                                                             current_repo_dir, total / (1024*1024), newest_path, (os.path.getsize(newest_path) / (1024*1024)))
                                             except Exception:
                                                 logging.info("[Download] Cache size under %s: %.2f MB (latest file: %s)",
-                                                             target_repo_dir, total / (1024*1024), newest_path)
+                                                             current_repo_dir, total / (1024*1024), newest_path)
                                         else:
-                                            logging.info("[Download] Cache size under %s: %.2f MB", target_repo_dir, total / (1024*1024))
+                                            logging.info("[Download] Cache size under %s: %.2f MB", current_repo_dir, total / (1024*1024))
                                         last_bytes = total
                                         last_path = newest_path
                                     monitor_stop.wait(15.0)
@@ -270,99 +310,137 @@ class Transcriber:
                                 from huggingface_hub import hf_hub_url  # type: ignore
                                 import certifi  # type: ignore
 
-                                # Create snapshot directory structure
-                                repo_id = f"Systran/faster-whisper-{remote_short}"
+                                if hf_token:
+                                    logging.info("[Download] Using Hugging Face token from environment for authenticated downloads")
+                                headers = {"Authorization": f"Bearer {hf_token.strip()}"} if hf_token else {}
+                                ca_bundle = certifi.where()
 
-                                # Get revision hash first
-                                api_url = f"https://huggingface.co/api/models/{repo_id}/revision/main"
-                                logging.info("[Download] Fetching revision info from: %s (via %s)", api_url, http_impl)
-                                if http_impl == "requests":
-                                    rev_resp = requests.get(api_url, timeout=30, verify=certifi.where())
-                                    rev_resp.raise_for_status()
-                                    rev_json = rev_resp.json()
-                                else:
-                                    with httpx.Client(verify=certifi.where(), timeout=30, follow_redirects=True) as client:
-                                        rev_resp = client.get(api_url, follow_redirects=True)
+                                class ManualDownloadAuthError(Exception):
+                                    """Raised when repository access requires authentication."""
+
+                                def _manual_download_single(repo_id: str) -> str:
+                                    download_repo_id[0] = repo_id
+                                    org, repo = split_repo_id(repo_id)
+                                    logging.info("[Download] Manual download targeting repo: %s", repo_id)
+
+                                    repo_cache_dir = os.path.join(cache_dir, cache_dir_name_for_repo(repo_id))
+                                    os.makedirs(repo_cache_dir, exist_ok=True)
+
+                                    # Determine revision hash for the repo
+                                    api_url = f"https://huggingface.co/api/models/{repo_id}/revision/main"
+                                    logging.info("[Download] Fetching revision info from: %s (via %s)", api_url, http_impl)
+                                    if http_impl == "requests":
+                                        rev_resp = requests.get(api_url, timeout=30, verify=ca_bundle, headers=headers)  # type: ignore
+                                        if rev_resp.status_code in (401, 403):
+                                            raise ManualDownloadAuthError(
+                                                "Authentication required to access this model. Set HUGGINGFACE_HUB_TOKEN or WHISPERDESK_HF_TOKEN."
+                                            )
                                         rev_resp.raise_for_status()
                                         rev_json = rev_resp.json()
-                                revision_hash = rev_json.get("sha", "main")
-                                logging.info("[Download] Resolved revision hash: %s", revision_hash)
-
-                                # Create snapshot directory
-                                repo_cache_dir = os.path.join(cache_dir, f"models--Systran--faster-whisper-{remote_short}")
-                                snapshot_dir = os.path.join(repo_cache_dir, "snapshots", revision_hash)
-                                os.makedirs(snapshot_dir, exist_ok=True)
-                                logging.info("[Download] Created snapshot directory: %s", snapshot_dir)
-
-                                # Update refs/main
-                                refs_dir = os.path.join(repo_cache_dir, "refs")
-                                os.makedirs(refs_dir, exist_ok=True)
-                                main_ref = os.path.join(refs_dir, "main")
-                                with open(main_ref, 'w', encoding='utf-8') as f:
-                                    f.write(revision_hash)
-                                logging.info("[Download] Updated refs/main to: %s", revision_hash)
-
-                                # Download each file
-                                files_to_download = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
-                                for filename in files_to_download:
-                                    file_path = os.path.join(snapshot_dir, filename)
-
-                                    # Skip if already exists and complete
-                                    if os.path.isfile(file_path):
-                                        file_size = os.path.getsize(file_path)
-                                        logging.info("[Download] File %s already exists (%.2f MB), skipping",
-                                                   filename, file_size / (1024*1024))
-                                        continue
-
-                                    # Get download URL
-                                    url = hf_hub_url(repo_id=repo_id, filename=filename, revision=revision_hash)
-                                    logging.info("[Download] Downloading %s from %s via %s", filename, url, http_impl)
-
-                                    # Download with streaming and progress
-                                    if http_impl == "requests":
-                                        with requests.get(url, stream=True, timeout=60, verify=certifi.where()) as r:  # type: ignore
-                                            r.raise_for_status()
-                                            total_size = int(r.headers.get('content-length', 0))
-                                            logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024*1024))
-                                            downloaded = 0
-                                            with open(file_path, 'wb') as f:
-                                                for chunk in r.iter_content(chunk_size=8192):
-                                                    if chunk:
-                                                        f.write(chunk)
-                                                        downloaded += len(chunk)
-                                                        if downloaded % (1024*1024) == 0:  # Log every MB
-                                                            pct = (downloaded / total_size * 100) if total_size else 0
-                                                            logging.info("[Download] %s: %.2f MB / %.2f MB (%.1f%%)",
-                                                                       filename, downloaded / (1024*1024),
-                                                                       total_size / (1024*1024), pct)
                                     else:
-                                        with httpx.Client(verify=certifi.where(), timeout=60, follow_redirects=True) as client:  # type: ignore
-                                            with client.stream("GET", url, follow_redirects=True) as r:
+                                        with httpx.Client(verify=ca_bundle, timeout=30, follow_redirects=True) as client:  # type: ignore
+                                            rev_resp = client.get(api_url, headers=headers, follow_redirects=True)
+                                            if rev_resp.status_code in (401, 403):
+                                                raise ManualDownloadAuthError(
+                                                    "Authentication required to access this model. Set HUGGINGFACE_HUB_TOKEN or WHISPERDESK_HF_TOKEN."
+                                                )
+                                            rev_resp.raise_for_status()
+                                            rev_json = rev_resp.json()
+
+                                    revision_hash = rev_json.get("sha", "main")
+                                    logging.info("[Download] Resolved revision hash: %s", revision_hash)
+
+                                    snapshot_dir = os.path.join(repo_cache_dir, "snapshots", revision_hash)
+                                    os.makedirs(snapshot_dir, exist_ok=True)
+                                    logging.info("[Download] Prepared snapshot directory: %s", snapshot_dir)
+
+                                    refs_dir = os.path.join(repo_cache_dir, "refs")
+                                    os.makedirs(refs_dir, exist_ok=True)
+                                    main_ref = os.path.join(refs_dir, "main")
+                                    with open(main_ref, "w", encoding="utf-8") as ref_fp:
+                                        ref_fp.write(revision_hash)
+                                    logging.info("[Download] Updated refs/main to: %s", revision_hash)
+
+                                    files_to_download = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
+                                    for filename in files_to_download:
+                                        file_path = os.path.join(snapshot_dir, filename)
+
+                                        if os.path.isfile(file_path):
+                                            file_size = os.path.getsize(file_path)
+                                            logging.info("[Download] File %s already exists (%.2f MB), skipping", filename, file_size / (1024 * 1024))
+                                            continue
+
+                                        url = hf_hub_url(repo_id=repo_id, filename=filename, revision=revision_hash)
+                                        logging.info("[Download] Downloading %s from %s via %s", filename, url, http_impl)
+
+                                        if http_impl == "requests":
+                                            with requests.get(url, stream=True, timeout=60, verify=ca_bundle, headers=headers) as r:  # type: ignore
+                                                if r.status_code in (401, 403):
+                                                    raise ManualDownloadAuthError(
+                                                        "Authentication required to download model artifacts. Set HUGGINGFACE_HUB_TOKEN or WHISPERDESK_HF_TOKEN."
+                                                    )
                                                 r.raise_for_status()
-                                                total_size = int(r.headers.get('content-length', 0))
-                                                logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024*1024))
+                                                total_size = int(r.headers.get("content-length", 0))
+                                                logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024 * 1024))
                                                 downloaded = 0
-                                                with open(file_path, 'wb') as f:
-                                                    for chunk in r.iter_bytes():
+                                                with open(file_path, "wb") as f:
+                                                    for chunk in r.iter_content(chunk_size=8192):
                                                         if chunk:
                                                             f.write(chunk)
                                                             downloaded += len(chunk)
-                                                            if downloaded % (1024*1024) == 0:
+                                                            if downloaded % (1024 * 1024) == 0:
                                                                 pct = (downloaded / total_size * 100) if total_size else 0
                                                                 logging.info("[Download] %s: %.2f MB / %.2f MB (%.1f%%)",
-                                                                               filename, downloaded / (1024*1024),
-                                                                               total_size / (1024*1024), pct)
+                                                                             filename, downloaded / (1024 * 1024),
+                                                                             total_size / (1024 * 1024), pct)
+                                        else:
+                                            with httpx.Client(verify=ca_bundle, timeout=60, follow_redirects=True) as client:  # type: ignore
+                                                with client.stream("GET", url, headers=headers, follow_redirects=True) as r:
+                                                    if r.status_code in (401, 403):
+                                                        raise ManualDownloadAuthError(
+                                                            "Authentication required to download model artifacts. Set HUGGINGFACE_HUB_TOKEN or WHISPERDESK_HF_TOKEN."
+                                                        )
+                                                    r.raise_for_status()
+                                                    total_size = int(r.headers.get("content-length", 0))
+                                                    logging.info("[Download] %s size: %.2f MB", filename, total_size / (1024 * 1024))
+                                                    downloaded = 0
+                                                    with open(file_path, "wb") as f:
+                                                        for chunk in r.iter_bytes():
+                                                            if chunk:
+                                                                f.write(chunk)
+                                                                downloaded += len(chunk)
+                                                                if downloaded % (1024 * 1024) == 0:
+                                                                    pct = (downloaded / total_size * 100) if total_size else 0
+                                                                    logging.info("[Download] %s: %.2f MB / %.2f MB (%.1f%%)",
+                                                                                 filename, downloaded / (1024 * 1024),
+                                                                                 total_size / (1024 * 1024), pct)
 
-                                    final_size = os.path.getsize(file_path)
-                                    logging.info("[Download] Completed %s: %.2f MB written",
-                                               filename, final_size / (1024*1024))
+                                        final_size = os.path.getsize(file_path)
+                                        logging.info("[Download] Completed %s: %.2f MB written", filename, final_size / (1024 * 1024))
 
-                                snapshot_path = snapshot_dir
-                                download_success = True
-                                logging.info("[Download] Manual download completed successfully: %s", snapshot_path)
+                                    return snapshot_dir
+
+                                manual_errors: List[str] = []
+                                for repo_id in repo_candidates:
+                                    try:
+                                        snapshot_dir = _manual_download_single(repo_id)
+                                        snapshot_path = snapshot_dir
+                                        download_success = True
+                                        selected_repo_id = repo_id
+                                        logging.info("[Download] Manual download completed successfully for %s", repo_id)
+                                        break
+                                    except ManualDownloadAuthError as auth_err:
+                                        logging.warning("[Download] Manual download requires authentication for %s: %s", repo_id, str(auth_err))
+                                        manual_errors.append(f"{repo_id}: {auth_err}")
+                                    except Exception as manual_err:
+                                        logging.error("[Download] Manual download failed for %s: %s", repo_id, str(manual_err), exc_info=True)
+                                        manual_errors.append(f"{repo_id}: {manual_err}")
+
+                                if not download_success and manual_errors:
+                                    logging.error("[Download] Manual download failed for all repo candidates: %s", "; ".join(manual_errors))
 
                             except Exception as manual_err:
-                                logging.error("[Download] Manual download failed: %s", str(manual_err), exc_info=True)
+                                logging.error("[Download] Manual download encountered an unexpected error: %s", str(manual_err), exc_info=True)
                                 snapshot_path = None
                                 download_success = False
 
@@ -374,11 +452,12 @@ class Transcriber:
                                 import threading
                                 result_container: List[Optional[str]] = [None]
                                 error_container: List[Optional[Exception]] = [None]
+                                snapshot_errors: List[str] = []
 
-                                def _download_with_snapshot():
+                                def _download_with_snapshot(repo_id: str) -> None:
                                     try:
                                         result_container[0] = snapshot_download(
-                                            repo_id=f"Systran/faster-whisper-{remote_short}",
+                                            repo_id=repo_id,
                                             cache_dir=cache_dir,
                                             local_files_only=False,
                                             allow_patterns=["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
@@ -386,23 +465,38 @@ class Transcriber:
                                             local_dir_use_symlinks=False,
                                             revision="main",
                                             resume_download=True,
+                                            token=hf_token,
                                         )
                                     except Exception as e:
                                         error_container[0] = e
 
-                                download_thread = threading.Thread(target=_download_with_snapshot, name="SnapshotDL")
-                                download_thread.start()
-                                download_thread.join(timeout=120)  # 2 minute timeout
+                                for repo_id in repo_candidates:
+                                    download_repo_id[0] = repo_id
+                                    selected_repo_id = repo_id
+                                    result_container[0] = None
+                                    error_container[0] = None
+                                    download_thread = threading.Thread(target=_download_with_snapshot, args=(repo_id,), name="SnapshotDL")
+                                    download_thread.start()
+                                    download_thread.join(timeout=120)  # 2 minute timeout
 
-                                if download_thread.is_alive():
-                                    logging.error("[Download] snapshot_download timed out after 120s")
-                                    raise TimeoutError("Model download exceeded 2 minutes - possible network or AV interference")
+                                    if download_thread.is_alive():
+                                        logging.error("[Download] snapshot_download timed out after 120s for %s", repo_id)
+                                        snapshot_errors.append(f"{repo_id}: timeout")
+                                        continue
 
-                                if error_container[0] is not None:
-                                    raise error_container[0]
+                                    if error_container[0] is not None:
+                                        logging.error("[Download] snapshot_download failed for %s: %s", repo_id, str(error_container[0]), exc_info=True)
+                                        snapshot_errors.append(f"{repo_id}: {error_container[0]}")
+                                        continue
 
-                                snapshot_path = result_container[0]
-                                logging.info("[Download] snapshot_download completed: %s", snapshot_path)
+                                    snapshot_path = result_container[0]
+                                    if snapshot_path:
+                                        logging.info("[Download] snapshot_download completed for %s: %s", repo_id, snapshot_path)
+                                        download_success = True
+                                        break
+
+                                if not download_success and snapshot_errors:
+                                    raise RuntimeError(f"snapshot_download failed for all candidates: {'; '.join(snapshot_errors)}")
 
                             except Exception as snap_err:
                                 logging.error("[Download] snapshot_download failed: %s", str(snap_err), exc_info=True)
@@ -517,11 +611,7 @@ class Transcriber:
                 try:
                     import time
                     # Get the download cache directory for this model
-                    org = "Systran"
-                    remote_short = to_remote_name(model_name)
-                    repo = f"faster-whisper-{remote_short}"
-                    cache_dir_name = f"models--{org}--{repo}"
-                    cache_path = os.path.join(models_root(), cache_dir_name)
+                    cache_path = os.path.join(models_root(), cache_dir_name_for_repo(download_repo_id[0]))
 
                     logging.debug("[DownloadProgress] Checking cache path: %s (exists=%s)",
                                  cache_path, os.path.isdir(cache_path))
