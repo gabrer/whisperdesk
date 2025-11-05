@@ -946,7 +946,9 @@ class Transcriber:
         }
 
     def _validate_feature_size(self, model_dir: str) -> None:
-        """Raise a helpful error if the loaded model expects more mel bins than the runtime provides."""
+        """Raise a helpful error if the loaded model expects more mel bins than the runtime provides.
+        Also log both values for diagnostics on Windows/macOS builds.
+        """
         try:
             model_obj = getattr(self, "model", None)
             if model_obj is None:
@@ -961,6 +963,7 @@ class Transcriber:
                     with open(preproc_path, "r", encoding="utf-8") as fh:
                         preproc_data = json.load(fh)
                         required_size = preproc_data.get("feature_size")
+            logging.info("[ModelInit] Feature sizes: required=%s, runtime=%s", required_size, current_size)
 
             if required_size and current_size and required_size != current_size:
                 message = (
