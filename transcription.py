@@ -79,17 +79,19 @@ class Transcriber:
 
         # Helper: check a directory contains expected CT2 files
         def _looks_like_ct2_dir(path: str) -> bool:
-            """CT2 Whisper dir is valid if it has config.json, model.bin, and either tokenizer.json or vocabulary.txt."""
+            """CT2 Whisper dir is valid if it has config.json, model.bin, tokenizer.json, and a vocabulary file."""
             try:
                 logging.debug("[FileSystem] Checking if %s looks like CT2 dir", path)
                 has_config = os.path.isfile(os.path.join(path, "config.json"))
                 has_model = os.path.isfile(os.path.join(path, "model.bin"))
                 has_tokenizer = os.path.isfile(os.path.join(path, "tokenizer.json"))
-                has_vocab = os.path.isfile(os.path.join(path, "vocabulary.txt"))
-                result = has_config and has_model and (has_tokenizer or has_vocab)
+                has_vocab_txt = os.path.isfile(os.path.join(path, "vocabulary.txt"))
+                has_vocab_json = os.path.isfile(os.path.join(path, "vocabulary.json"))
+                has_vocab = has_vocab_txt or has_vocab_json
+                result = has_config and has_model and has_tokenizer and has_vocab
                 logging.debug(
-                    "[FileSystem] %s is CT2 dir: %s (config=%s, model=%s, tokenizer=%s, vocab=%s)",
-                    path, result, has_config, has_model, has_tokenizer, has_vocab
+                    "[FileSystem] %s is CT2 dir: %s (config=%s, model=%s, tokenizer=%s, vocab_txt=%s, vocab_json=%s)",
+                    path, result, has_config, has_model, has_tokenizer, has_vocab_txt, has_vocab_json
                 )
                 return result
             except Exception as e:
@@ -389,7 +391,7 @@ class Transcriber:
                                         ref_fp.write(revision_hash)
                                     logging.info("[Download] Updated refs/main to: %s", revision_hash)
 
-                                    desired = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
+                                    desired = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt", "vocabulary.json"]
                                     if available_names:
                                         files_to_download = [f for f in desired if f in available_names]
                                         missing = [f for f in desired if f not in available_names]
