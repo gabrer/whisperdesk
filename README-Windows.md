@@ -107,6 +107,7 @@ This tells Windows Defender to skip scanning the WhisperDesk cache folder, preve
   - `~/.cache/WhisperDesk/hf-cache` on Linux
 - This avoids permission issues and antivirus interference in bundled apps.
 - Some Hugging Face repositories (for example `faster-whisper-large-v3-turbo`) require accepting a license before download. Generate an access token on huggingface.co and set it via `WHISPERDESK_HF_TOKEN` (or the standard `HUGGINGFACE_HUB_TOKEN`) so the Windows bundle can authenticate when fetching those models.
+- Whisper v3 family (e.g., `large-v3`, `large-v3-turbo`, `distil-large-v3`) needs `faster-whisper` 1.0.5+ and `ctranslate2` 4.7+. Update your build venv (`pip install -U faster-whisper ctranslate2`) before running `build.ps1` so the packaged exe includes the newer 128-mel feature extractor.
 - If network downloads are slow or blocked, you can pre-download models on a machine with internet and copy the resulting `models--<org>--<repo>` folder from the cache listed above.
 - For maximum portability (offline), place CT2 model folders like `whisper-small-ct2` directly under `models/` before building.
 

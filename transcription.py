@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import platform
@@ -79,19 +80,17 @@ class Transcriber:
 
         # Helper: check a directory contains expected CT2 files
         def _looks_like_ct2_dir(path: str) -> bool:
-            """CT2 Whisper dir is valid if it has config.json, model.bin, tokenizer.json, and a vocabulary file."""
+            """CT2 Whisper dir is valid if it has config.json, model.bin, and either tokenizer.json or vocabulary.txt."""
             try:
                 logging.debug("[FileSystem] Checking if %s looks like CT2 dir", path)
                 has_config = os.path.isfile(os.path.join(path, "config.json"))
                 has_model = os.path.isfile(os.path.join(path, "model.bin"))
                 has_tokenizer = os.path.isfile(os.path.join(path, "tokenizer.json"))
-                has_vocab_txt = os.path.isfile(os.path.join(path, "vocabulary.txt"))
-                has_vocab_json = os.path.isfile(os.path.join(path, "vocabulary.json"))
-                has_vocab = has_vocab_txt or has_vocab_json
-                result = has_config and has_model and has_tokenizer and has_vocab
+                has_vocab = os.path.isfile(os.path.join(path, "vocabulary.txt"))
+                result = has_config and has_model and (has_tokenizer or has_vocab)
                 logging.debug(
-                    "[FileSystem] %s is CT2 dir: %s (config=%s, model=%s, tokenizer=%s, vocab_txt=%s, vocab_json=%s)",
-                    path, result, has_config, has_model, has_tokenizer, has_vocab_txt, has_vocab_json
+                    "[FileSystem] %s is CT2 dir: %s (config=%s, model=%s, tokenizer=%s, vocab=%s)",
+                    path, result, has_config, has_model, has_tokenizer, has_vocab
                 )
                 return result
             except Exception as e:
@@ -409,7 +408,7 @@ class Transcriber:
                                         ref_fp.write(revision_hash)
                                     logging.info("[Download] Updated refs/main to: %s", revision_hash)
 
-                                    desired = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt", "vocabulary.json"]
+                                    desired = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
                                     if available_names:
                                         files_to_download = [f for f in desired if f in available_names]
                                         missing = [f for f in desired if f not in available_names]
@@ -911,6 +910,7 @@ class Transcriber:
 
         # Stop download progress timer if it was started
         logging.info("[ModelInit] ============ MODEL LOAD COMPLETE ============")
+        self._validate_feature_size(model_id)
         logging.info("[ModelInit] Stopping download progress timer (active=%s, timer=%s)", download_progress_active, download_timer is not None)
         download_progress_active = False
         if download_timer:
@@ -962,3 +962,33 @@ class Transcriber:
             "duration": float(getattr(info, 'duration', 0.0)),
             "segments": out_segments
         }
+
+    def _validate_feature_size(self, model_dir: str) -> None:
+        """Raise a helpful error if the loaded model expects more mel bins than the runtime provides.
+        Also log both values for diagnostics on Windows/macOS builds.
+        """
+        try:
+            model_obj = getattr(self, "model", None)
+            if model_obj is None:
+                return
+            extractor = getattr(model_obj, "feature_extractor", None)
+            current_size = getattr(extractor, "feature_size", None)
+
+            required_size = None
+            if os.path.isdir(model_dir):
+                preproc_path = os.path.join(model_dir, "preprocessor_config.json")
+                if os.path.isfile(preproc_path):
+                    with open(preproc_path, "r", encoding="utf-8") as fh:
+                        preproc_data = json.load(fh)
+                        required_size = preproc_data.get("feature_size")
+            logging.info("[ModelInit] Feature sizes: required=%s, runtime=%s", required_size, current_size)
+
+            if required_size and current_size and required_size != current_size:
+                message = (
+                    "Whisper model requires {required} mel bins but faster-whisper is configured with {current}. "
+                    "Upgrade faster-whisper>=1.0.5 and ctranslate2>=4.7.0 to use Whisper v3 models."
+                ).format(required=required_size, current=current_size)
+                logging.error("[ModelInit] %s", message)
+                raise RuntimeError(message)
+        except Exception as exc:  # noqa: BLE001
+            logging.debug("[ModelInit] Feature size validation skipped: %s", exc)

@@ -77,6 +77,8 @@ Tip: On first use, models may be downloaded automatically. Place pre-downloaded 
 
 > **Note:** Some Hugging Face repositories (e.g., `faster-whisper-large-v3-turbo`) require an authenticated download. Create a token on huggingface.co and export it as `WHISPERDESK_HF_TOKEN` (or the standard `HUGGINGFACE_HUB_TOKEN`) before running WhisperDesk so gated models can be fetched.
 
+> **Whisper v3 models:** Use `faster-whisper` 1.0.5+ and `ctranslate2` 4.7+ when running from source so the newer 128-bin feature extractor is available. The Windows build script picks up versions from `requirements.txt`, so rebuild after pulling these changes.
+
 ## Build Windows .exe (developer)
 
 On Windows with Python and the venv activated:
