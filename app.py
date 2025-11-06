@@ -6,6 +6,7 @@ import threading
 import signal
 
 from PySide6.QtCore import QThread, Signal, QUrl, Qt
+from datetime import datetime
 from PySide6.QtGui import (
     QStandardItemModel, QStandardItem, QDesktopServices,
     QGuiApplication, QFont, QPalette, QColor
@@ -415,6 +416,24 @@ class MainWindow(QWidget):
         tabs.addTab(self._build_easy_tab(), "Basic Settings")
         tabs.addTab(self._build_advanced_tab(), "Advanced Settings")
         right_column.addWidget(tabs)
+
+        # Footer: University copyrights (bottom of right panel)
+        right_column.addStretch(1)
+        current_year = datetime.now().year
+        copyright_label = QLabel(
+            f"\u00A9 {current_year} University of Warwick\n"
+            f"\u00A9 {current_year} University of Leeds\n"
+            "All rights reserved."
+        )
+        copyright_label.setObjectName("caption")
+        copyright_label.setWordWrap(True)
+        try:
+            # Small, subtle footer aligned to bottom-left, selectable text
+            copyright_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom)
+            copyright_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        except Exception:
+            pass
+        right_column.addWidget(copyright_label)
 
         # Add right column to main layout
         main_layout.addLayout(right_column, 1)
