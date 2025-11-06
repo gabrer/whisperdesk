@@ -1047,59 +1047,6 @@ def main():
         except Exception as e:
             logging.error("[Startup] Failed to configure SSL certificates: %s", str(e), exc_info=True)
 
-        # Ensure libsndfile is discoverable for soundfile on Windows bundles
-        try:
-            import soundfile as _sf  # type: ignore
-            sf_pkg_dir = os.path.dirname(_sf.__file__)
-            candidates = []
-            # Common locations in wheels and PyInstaller bundles
-            candidates.extend(glob.glob(os.path.join(sf_pkg_dir, "_soundfile_data", "libsndfile*.dll")))
-            # Also check next to the executable (PyInstaller one-dir)
-            exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.getcwd()
-            candidates.extend(glob.glob(os.path.join(exe_dir, "libsndfile*.dll")))
-            if candidates:
-                # Prefer libsndfile-1.dll if present
-                chosen = None
-                for name in ("libsndfile-1.dll", "libsndfile.dll"):
-                    for c in candidates:
-                        if os.path.basename(c).lower() == name:
-                            chosen = c
-                            break
-                    if chosen:
-                        break
-                if not chosen:
-                    chosen = candidates[0]
-                os.environ['SOUNDFILE_LIBRARY'] = chosen
-                logging.info("[Startup] Configured SOUNDFILE_LIBRARY: %s", chosen)
-                logging.info("[FileSystem] libsndfile exists: %s", os.path.exists(chosen))
-            else:
-                logging.warning("[Startup] libsndfile*.dll not found in expected locations; soundfile may fail to load.")
-        except Exception as e:
-            logging.error("[Startup] Failed to configure libsndfile for soundfile: %s", str(e), exc_info=True)
-
-        # Self-check: verify libsndfile works end-to-end to fail fast if broken
-        try:
-            import numpy as _np  # type: ignore
-            import soundfile as _sf  # type: ignore
-            sr = 16000
-            data = _np.zeros(sr // 10, dtype=_np.float32)  # 0.1s silence
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
-                _sf.write(tmp.name, data, sr)
-                info = _sf.info(tmp.name)
-                logging.info("[Startup] libsndfile self-check OK: format=%s, samplerate=%s, channels=%s",
-                             getattr(info, 'format', 'unknown'), getattr(info, 'samplerate', 'unknown'), getattr(info, 'channels', 'unknown'))
-        except Exception as e:
-            logging.error("[Startup] libsndfile self-check failed: %s", str(e), exc_info=True)
-            # Provide actionable guidance and exit early to avoid later failures
-            msg = (
-                "Audio backend initialization failed (libsndfile not available).\n"
-                "Please ensure libsndfile DLL is packaged and discoverable.\n"
-                "Try: (1) Reinstall soundfile, (2) Rebuild with PyInstaller including soundfile, "
-                "(3) Place libsndfile-1.dll next to the executable, or (4) set SOUNDFILE_LIBRARY."
-            )
-            logging.critical(msg)
-
-
     # Log critical paths for debugging
     logging.info("[Startup] app_root: %s", app_root())
     logging.info("[Startup] models_root: %s", models_root())
