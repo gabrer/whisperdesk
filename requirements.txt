@@ -4,7 +4,9 @@
 PySide6>=6.7
 
 # Transcription
-faster-whisper>=1.0.0
+# Note: Whisper v3 models require 128 mel features (faster-whisper>=1.0 + ctranslate2>=4.6)
+# Pin to 1.1+ to avoid older Windows wheels that default to 80 mels
+faster-whisper>=1.1.0
 ctranslate2>=4.6.0
 
 # Diarization

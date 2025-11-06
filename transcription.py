@@ -105,6 +105,24 @@ class Transcriber:
         download_repo_id: List[str] = [repo_candidates[0]]  # Mutable for closures
         selected_repo_id: Optional[str] = None
 
+        # Check if this is a Whisper v3 model (requires 128 mel features)
+        is_v3_model = remote_short in {"large-v3", "distil-large-v3", "large-v3-turbo"}
+        if is_v3_model:
+            try:
+                from faster_whisper import __version__ as fw_ver  # type: ignore
+                import ctranslate2  # type: ignore
+                ct2_ver = getattr(ctranslate2, "__version__", "0.0.0")
+                logging.info("[ModelInit] Whisper v3 model detected. Versions: faster-whisper=%s, ctranslate2=%s", fw_ver, ct2_ver)
+                # Simple version check: ensure we have at least 1.0 and 4.6
+                if fw_ver.split('.')[0] == '0' or (ct2_ver.split('.')[0] == '4' and int(ct2_ver.split('.')[1]) < 6):
+                    raise RuntimeError(
+                        f"Whisper v3 models require faster-whisper>=1.0.0 and ctranslate2>=4.6.0 for 128 mel features. "
+                        f"Current: faster-whisper={fw_ver}, ctranslate2={ct2_ver}. "
+                        f"Please upgrade: pip install --upgrade 'faster-whisper>=1.1.0' 'ctranslate2>=4.6.0'"
+                    )
+            except ImportError:
+                pass  # Already handled by earlier import check
+
         # Try 1: explicit local ct2 directory (e.g., models/whisper-small-ct2)
         model_id: str
         logging.info("[ModelInit] Checking model_dir: %s", self.model_dir)

@@ -110,6 +110,32 @@ This tells Windows Defender to skip scanning the WhisperDesk cache folder, preve
 - If network downloads are slow or blocked, you can pre-download models on a machine with internet and copy the resulting `models--<org>--<repo>` folder from the cache listed above.
 - For maximum portability (offline), place CT2 model folders like `whisper-small-ct2` directly under `models/` before building.
 
+### Whisper v3 shape mismatch (80 vs 128 mel features)
+
+**Symptoms:** Error when using Whisper v3 models (large-v3, distil-large-v3, large-v3-turbo):
+
+```
+Invalid input features shape: expected an input with shape (1, 128, 3000), but got an input with shape (1, 80, 3000) instead
+```
+
+**Cause:** Whisper v3 models require 128 mel features. This error means the Windows build has older `faster-whisper` or `ctranslate2` wheels that extract only 80 features.
+
+**Solution:** Upgrade dependencies in your build environment before building:
+
+```powershell
+python -m pip install --upgrade pip wheel
+pip install --upgrade "faster-whisper>=1.1.0" "ctranslate2>=4.6.0"
+pip install -r requirements.txt --upgrade
+```
+
+Then rebuild:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build.ps1 -Mode onedir
+```
+
+**Note:** Other Whisper models (base, small, medium, large-v2) use 80 mel features and work fine. This only affects v3 models.
+
 ## 8) Customization
 
 - Default settings are in `presets.json`.
