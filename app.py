@@ -1098,8 +1098,7 @@ def main():
                 "(3) Place libsndfile-1.dll next to the executable, or (4) set SOUNDFILE_LIBRARY."
             )
             logging.critical(msg)
-            # Exit before launching the UI to avoid confusing later errors
-            sys.exit(1)
+
 
     # Log critical paths for debugging
     logging.info("[Startup] app_root: %s", app_root())

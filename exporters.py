@@ -4,19 +4,21 @@ import logging
 import os
 
 
-def export_txt(path: str, segments: List[Dict[str, Any]], speaker_map: Dict[int, str], include_speakers: bool = True):
+def export_txt(path: str, segments: List[Dict[str, Any]], speaker_map: Dict[int, str], include_speakers: bool = True, include_timestamps: bool = True):
     logging.info("[FileSystem] Exporting TXT to: %s", path)
     logging.info("[FileSystem] Output directory: %s", os.path.dirname(path))
     logging.info("[FileSystem] Output directory exists: %s", os.path.exists(os.path.dirname(path)))
 
     lines = []
     for seg in segments:
-        timestamp = f"[{format_ts(seg['start'])} – {format_ts(seg['end'])}]"
+        prefix = ""
+        if include_timestamps:
+            prefix = f"[{format_ts(seg['start'])} – {format_ts(seg['end'])}] "
         if include_speakers:
             spk_name = speaker_map.get(seg.get("speaker", 0), f"Speaker {seg.get('speaker', 0)+1}")
-            lines.append(f"{timestamp} {spk_name}: {seg['text']}")
+            lines.append(f"{prefix}{spk_name}: {seg['text']}")
         else:
-            lines.append(f"{timestamp} {seg['text']}")
+            lines.append(f"{prefix}{seg['text']}")
     content = "\n".join(lines)
 
     try:
@@ -30,7 +32,7 @@ def export_txt(path: str, segments: List[Dict[str, Any]], speaker_map: Dict[int,
         raise
 
 
-def export_docx(path: str, segments: List[Dict[str, Any]], speaker_map: Dict[int, str], include_speakers: bool = True):
+def export_docx(path: str, segments: List[Dict[str, Any]], speaker_map: Dict[int, str], include_speakers: bool = True, include_timestamps: bool = True):
     logging.info("[FileSystem] Exporting DOCX to: %s", path)
     logging.info("[FileSystem] Output directory: %s", os.path.dirname(path))
     logging.info("[FileSystem] Output directory exists: %s", os.path.exists(os.path.dirname(path)))
@@ -43,7 +45,8 @@ def export_docx(path: str, segments: List[Dict[str, Any]], speaker_map: Dict[int
 
         for seg in segments:
             p = doc.add_paragraph()
-            p.add_run(f"[{format_ts(seg['start'])} – {format_ts(seg['end'])}] ")
+            if include_timestamps:
+                p.add_run(f"[{format_ts(seg['start'])} – {format_ts(seg['end'])}] ")
             if include_speakers:
                 spk_name = speaker_map.get(seg.get("speaker", 0), f"Speaker {seg.get('speaker', 0)+1}")
                 run2 = p.add_run(f"{spk_name}: ")

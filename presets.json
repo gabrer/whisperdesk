@@ -2,9 +2,9 @@
   "defaults": {
     "model_preference": "small",
     "language_hint": "en",
-    "word_timestamps": true,
+    "word_timestamps": false,
     "vad_sensitivity": "normal",
-    "diarization_max_speakers": 2,
+    "diarization_max_speakers": 1,
     "device_mode": "cpu",
     "output_formats": [
       "txt",

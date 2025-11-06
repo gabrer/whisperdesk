@@ -101,10 +101,12 @@ def mp_transcribe_and_export(task: Dict[str, Any]) -> Optional[str]:
         speaker_map = {i: f"Speaker {i+1}" for i in spk_ids}
 
         # export
+        # Honor the UI setting: when word_timestamps is off, output plain text without any timestamps
+        include_timestamps = bool(task.get("word_timestamps", False))
         if "txt" in task["output_formats"]:
-            export_txt(paths["out_txt"], segs, speaker_map, include_speakers=include_speakers)
+            export_txt(paths["out_txt"], segs, speaker_map, include_speakers=include_speakers, include_timestamps=include_timestamps)
         if "docx" in task["output_formats"]:
-            export_docx(paths["out_docx"], segs, speaker_map, include_speakers=include_speakers)
+            export_docx(paths["out_docx"], segs, speaker_map, include_speakers=include_speakers, include_timestamps=include_timestamps)
         return None
     except Exception as e:
         return str(e)
@@ -149,10 +151,11 @@ def thread_transcribe_and_export(task: Dict[str, Any]) -> Optional[str]:
         )
         speaker_map = {i: f"Speaker {i+1}" for i in spk_ids}
 
+        include_timestamps = bool(task.get("word_timestamps", False))
         if "txt" in task["output_formats"]:
-            export_txt(paths["out_txt"], segs, speaker_map, include_speakers=include_speakers)
+            export_txt(paths["out_txt"], segs, speaker_map, include_speakers=include_speakers, include_timestamps=include_timestamps)
         if "docx" in task["output_formats"]:
-            export_docx(paths["out_docx"], segs, speaker_map, include_speakers=include_speakers)
+            export_docx(paths["out_docx"], segs, speaker_map, include_speakers=include_speakers, include_timestamps=include_timestamps)
         return None
     except Exception as e:
         return str(e)
