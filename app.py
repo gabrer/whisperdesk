@@ -3,6 +3,7 @@ import sys
 import logging
 from typing import List
 import glob
+import tempfile
 import threading
 import signal
 
@@ -1075,6 +1076,30 @@ def main():
                 logging.warning("[Startup] libsndfile*.dll not found in expected locations; soundfile may fail to load.")
         except Exception as e:
             logging.error("[Startup] Failed to configure libsndfile for soundfile: %s", str(e), exc_info=True)
+
+        # Self-check: verify libsndfile works end-to-end to fail fast if broken
+        try:
+            import numpy as _np  # type: ignore
+            import soundfile as _sf  # type: ignore
+            sr = 16000
+            data = _np.zeros(sr // 10, dtype=_np.float32)  # 0.1s silence
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
+                _sf.write(tmp.name, data, sr)
+                info = _sf.info(tmp.name)
+                logging.info("[Startup] libsndfile self-check OK: format=%s, samplerate=%s, channels=%s",
+                             getattr(info, 'format', 'unknown'), getattr(info, 'samplerate', 'unknown'), getattr(info, 'channels', 'unknown'))
+        except Exception as e:
+            logging.error("[Startup] libsndfile self-check failed: %s", str(e), exc_info=True)
+            # Provide actionable guidance and exit early to avoid later failures
+            msg = (
+                "Audio backend initialization failed (libsndfile not available).\n"
+                "Please ensure libsndfile DLL is packaged and discoverable.\n"
+                "Try: (1) Reinstall soundfile, (2) Rebuild with PyInstaller including soundfile, "
+                "(3) Place libsndfile-1.dll next to the executable, or (4) set SOUNDFILE_LIBRARY."
+            )
+            logging.critical(msg)
+            # Exit before launching the UI to avoid confusing later errors
+            sys.exit(1)
 
     # Log critical paths for debugging
     logging.info("[Startup] app_root: %s", app_root())
