@@ -914,6 +914,22 @@ class Transcriber:
 
         # Stop download progress timer if it was started
         logging.info("[ModelInit] ============ MODEL LOAD COMPLETE ============")
+
+        # CRITICAL FIX: Explicitly set feature_size for Whisper V3 models
+        # Windows doesn't always load preprocessor_config.json correctly, causing 80->128 mismatch
+        if is_v3_model:
+            try:
+                logging.info("[ModelInit] Whisper V3 model detected, setting feature_size=128")
+                extractor = getattr(self.model, "feature_extractor", None)
+                if extractor:
+                    old_size = getattr(extractor, "feature_size", None)
+                    extractor.feature_size = 128
+                    logging.info("[ModelInit] Updated feature_size: %s -> 128", old_size)
+                else:
+                    logging.warning("[ModelInit] No feature_extractor found on model, cannot set feature_size")
+            except Exception as feat_err:
+                logging.error("[ModelInit] Failed to set feature_size for V3: %s", str(feat_err), exc_info=True)
+
         self._validate_feature_size(model_id)
         logging.info("[ModelInit] Stopping download progress timer (active=%s, timer=%s)", download_progress_active, download_timer is not None)
         download_progress_active = False
