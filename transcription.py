@@ -411,7 +411,8 @@ class Transcriber:
                                     logging.info("[Download] Updated refs/main to: %s", revision_hash)
 
                                     # Whisper v3 uses vocabulary.json instead of vocabulary.txt
-                                    desired = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt", "vocabulary.json"]
+                                    # Also fetch preprocessor_config.json for feature extraction configuration
+                                    desired = ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt", "vocabulary.json", "preprocessor_config.json"]
                                     if available_names:
                                         files_to_download = [f for f in desired if f in available_names]
                                         missing = [f for f in desired if f not in available_names]
@@ -917,18 +918,103 @@ class Transcriber:
 
         # CRITICAL FIX: Explicitly set feature_size for Whisper V3 models
         # Windows doesn't always load preprocessor_config.json correctly, causing 80->128 mismatch
+        # Read num_mel_bins from config.json to be accurate
         if is_v3_model:
             try:
-                logging.info("[ModelInit] Whisper V3 model detected, setting feature_size=128")
+                logging.info("[ModelInit] Whisper V3 model detected, configuring feature extractor from config.json")
+
+                # Determine the actual model directory path
+                config_model_dir = model_id if os.path.isdir(model_id) else self.model_dir
+
+                # Read num_mel_bins from config.json
+                config_path = os.path.join(config_model_dir, "config.json")
+                num_mel_bins = 128  # Default for v3
+
+                if os.path.isfile(config_path):
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        config_data = json.load(f)
+                        num_mel_bins = config_data.get("num_mel_bins", 128)
+                        logging.info("[ModelInit] Read num_mel_bins=%d from config.json", num_mel_bins)
+                else:
+                    logging.warning("[ModelInit] config.json not found at %s, using default num_mel_bins=128", config_path)
+
+                # Apply to feature extractor
                 extractor = getattr(self.model, "feature_extractor", None)
                 if extractor:
                     old_size = getattr(extractor, "feature_size", None)
-                    extractor.feature_size = 128
-                    logging.info("[ModelInit] Updated feature_size: %s -> 128", old_size)
+                    extractor.feature_size = num_mel_bins
+
+                    # Also set nb_max_frames if present (v3 uses 3000)
+                    if hasattr(extractor, "nb_max_frames"):
+                        old_frames = getattr(extractor, "nb_max_frames", None)
+                        extractor.nb_max_frames = 3000
+                        logging.info("[ModelInit] Updated nb_max_frames: %s -> 3000", old_frames)
+
+                    logging.info("[ModelInit] Updated feature_size: %s -> %d", old_size, num_mel_bins)
                 else:
                     logging.warning("[ModelInit] No feature_extractor found on model, cannot set feature_size")
             except Exception as feat_err:
-                logging.error("[ModelInit] Failed to set feature_size for V3: %s", str(feat_err), exc_info=True)
+                logging.error("[ModelInit] Failed to configure feature_size for V3: %s", str(feat_err), exc_info=True)
+
+        # Validate tokenizer for Whisper V3 models
+        if is_v3_model:
+            try:
+                logging.info("[ModelInit] Validating Whisper V3 tokenizer...")
+                tokenizer = getattr(self.model, "hf_tokenizer", None)
+                if tokenizer:
+                    vocab_size = len(tokenizer)
+                    logging.info("[ModelInit] Whisper V3 tokenizer vocab_size: %d", vocab_size)
+                    # V3 models have ~151,000 tokens vs ~51,000 for v2
+                    if vocab_size < 100000:
+                        logging.warning(
+                            "[ModelInit] Unexpected vocab_size for v3 model: %d (expected ~151k). "
+                            "This may indicate the wrong tokenizer was loaded.",
+                            vocab_size
+                        )
+                    else:
+                        logging.info("[ModelInit] Tokenizer validation passed ✓")
+                else:
+                    logging.warning("[ModelInit] No tokenizer found on model for validation")
+            except Exception as tok_err:
+                logging.debug("[ModelInit] Could not validate tokenizer: %s", str(tok_err))
+
+        # Runtime sanity check: test feature extraction with dummy audio
+        if is_v3_model:
+            try:
+                logging.info("[ModelInit] Running feature extraction sanity check...")
+                import numpy as np
+
+                # Create a dummy audio segment (1 second at 16kHz)
+                dummy_audio = np.zeros(16000, dtype=np.float32)
+
+                # Test feature extraction
+                extractor = getattr(self.model, "feature_extractor", None)
+                if extractor and callable(extractor):
+                    features = extractor(dummy_audio)
+                    feature_shape = features.shape
+                    logging.info("[ModelInit] Test feature extraction shape: %s", feature_shape)
+
+                    # V3 expects (128, N) where N depends on audio length
+                    if feature_shape[0] != 128:
+                        error_msg = (
+                            f"Feature extractor producing wrong shape: {feature_shape}. "
+                            f"Expected first dimension to be 128 for Whisper v3. "
+                            f"This may indicate an incompatible faster-whisper or ctranslate2 version."
+                        )
+                        logging.error("[ModelInit] %s", error_msg)
+                        raise RuntimeError(error_msg)
+
+                    logging.info("[ModelInit] Feature extraction sanity check passed ✓")
+                else:
+                    logging.warning("[ModelInit] Feature extractor not callable, skipping sanity check")
+            except Exception as sanity_err:
+                logging.error("[ModelInit] Feature extraction sanity check failed: %s", str(sanity_err), exc_info=True)
+                # Don't raise here - let the actual transcription fail with a better error message
+                # But warn the user that v3 may not work correctly
+                logging.warning(
+                    "[ModelInit] ⚠️ Whisper V3 feature extraction test failed. "
+                    "Transcription may fail. Check faster-whisper and ctranslate2 versions."
+                )
 
         self._validate_feature_size(model_id)
         logging.info("[ModelInit] Stopping download progress timer (active=%s, timer=%s)", download_progress_active, download_timer is not None)
