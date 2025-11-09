@@ -917,37 +917,75 @@ class MainWindow(QWidget):
                 f"or use an already downloaded model."
             )
 
-        # Cap workers for very large models and warn if memory appears low
+        # Intelligent memory-based constraints for large models
         try:
             model_lower = model_name.lower()
-            # Heuristic cap for large models
-            if "large" in model_lower and self.cfg.num_workers > 2:
-                self.cfg.num_workers = 2
-                try:
-                    self.num_workers_combo.setCurrentIndex(self.cfg.num_workers - 1)
-                except Exception:
-                    pass
-                self.progress_label.setText("ℹ️ Capping workers to 2 for large models to avoid memory pressure.")
-            # Best-effort low-memory detection (psutil optional)
+            is_large_model = "large" in model_lower
+
+            # Get system memory info (best-effort with psutil)
             try:
                 import psutil  # type: ignore
-                avail_gb = psutil.virtual_memory().available / (1024 ** 3)
-                if avail_gb < 4 and self.cfg.num_workers > 1:
+                total_ram_gb = psutil.virtual_memory().total / (1024 ** 3)
+                avail_ram_gb = psutil.virtual_memory().available / (1024 ** 3)
+                has_low_ram = total_ram_gb <= 9
+                has_very_low_ram = avail_ram_gb < 4
+                logging.info("[Memory] Total RAM: %.1f GB, Available: %.1f GB", total_ram_gb, avail_ram_gb)
+            except Exception:
+                # psutil not available or failed; use conservative defaults
+                has_low_ram = False
+                has_very_low_ram = False
+                logging.warning("[Memory] Could not detect system memory, using default constraints")
+
+            # Apply constraints based on model size and memory
+            if is_large_model and has_low_ram:
+                # Large model + <=9GB RAM: Force single worker to prevent OOM
+                # But allow multiple cpu_threads (handled by transcription.py)
+                if self.cfg.num_workers > 1:
                     self.cfg.num_workers = 1
                     try:
-                        self.num_workers_combo.setCurrentIndex(self.cfg.num_workers - 1)
+                        self.num_workers_combo.setCurrentIndex(0)  # Set to "1 (safest)"
                     except Exception:
                         pass
-                    self.progress_label.setText("ℹ️ Low memory detected (<4 GB available). Using single worker to improve stability.")
-            except Exception:
-                # psutil not present or check failed; ignore
-                pass
+                    self.progress_label.setText(
+                        f"ℹ️ Large model + ≤9GB RAM detected. Using single worker with multiple threads for stability. "
+                        f"(Total RAM: {total_ram_gb:.1f}GB)"
+                    )
+                    logging.info("[Memory] Large model constraint: num_workers=1 (low RAM: %.1f GB)", total_ram_gb)
+            elif is_large_model and not has_low_ram:
+                # Large model + >9GB RAM: Allow up to 2 workers (cross-file parallelization cap)
+                # Multiple threads per worker allowed (handled by transcription.py)
+                if self.cfg.num_workers > 2:
+                    self.cfg.num_workers = 2
+                    try:
+                        self.num_workers_combo.setCurrentIndex(1)  # Set to "2"
+                    except Exception:
+                        pass
+                    self.progress_label.setText(
+                        f"ℹ️ Large model detected. Capping workers to 2 to avoid memory pressure. "
+                        f"(Total RAM: {total_ram_gb:.1f}GB)"
+                    )
+                    logging.info("[Memory] Large model constraint: num_workers=2 (sufficient RAM: %.1f GB)", total_ram_gb)
+            elif has_very_low_ram and self.cfg.num_workers > 1:
+                # Any model + <4GB available: Emergency fallback to single worker
+                self.cfg.num_workers = 1
+                try:
+                    self.num_workers_combo.setCurrentIndex(0)
+                except Exception:
+                    pass
+                self.progress_label.setText(
+                    f"⚠️ Very low memory detected (<4 GB available). Using single worker to prevent crashes. "
+                    f"Close other applications to free up memory."
+                )
+                logging.warning("[Memory] Emergency constraint: num_workers=1 (available RAM: %.1f GB)", avail_ram_gb)
+
             # Update the Advanced tab hint label
             try:
                 self._update_parallel_hint()
             except Exception:
                 pass
-        except Exception:
+        except Exception as e:
+            logging.error("[Memory] Failed to apply memory constraints: %s", str(e))
+            # Continue with user's original settings if constraint logic fails
             pass
 
         self.btn_transcribe.setEnabled(False)
