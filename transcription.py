@@ -881,8 +881,15 @@ class Transcriber:
                 # Compute a reasonable cpu_threads for CPU fallback
                 try:
                     total_cores = os.cpu_count() or 4
-                    usable = max(1, total_cores - 1)
-                    cpu_threads_fallback = max(1, min(usable, (usable + 1) // 2))
+                    usable = max(1, total_cores - 1)  # Leave 1 core for system
+                    if num_workers > 1:
+                        # Multiple workers: divide threads among them
+                        cpu_threads_fallback = max(1, usable // num_workers)
+                    else:
+                        # Single worker: use all available cores (minus 1 for system)
+                        cpu_threads_fallback = usable
+                    logging.info("[ModelInit] Thread calculation: total_cores=%d, usable=%d, num_workers=%d, cpu_threads=%d",
+                                total_cores, usable, num_workers, cpu_threads_fallback)
                 except Exception:
                     cpu_threads_fallback = 1
                 logging.info("[ModelInit] WhisperModel params: model_id=%s, device=cpu, compute_type=%s, num_workers=%d, cpu_threads=%d, download_root=%s",
@@ -908,11 +915,15 @@ class Transcriber:
             # Compute a reasonable cpu_threads for direct CPU load
             try:
                 total_cores = os.cpu_count() or 4
-                usable = max(1, total_cores - 1)
+                usable = max(1, total_cores - 1)  # Leave 1 core for system
                 if num_workers > 1:
+                    # Multiple workers: divide threads among them
                     cpu_threads_direct = max(1, usable // num_workers)
                 else:
-                    cpu_threads_direct = max(1, min(usable, (usable + 1) // 2))
+                    # Single worker: use all available cores (minus 1 for system)
+                    cpu_threads_direct = usable
+                logging.info("[ModelInit] Thread calculation: total_cores=%d, usable=%d, num_workers=%d, cpu_threads=%d",
+                            total_cores, usable, num_workers, cpu_threads_direct)
             except Exception:
                 cpu_threads_direct = 1
             logging.info("[ModelInit] WhisperModel params: model_id=%s, device=%s, compute_type=%s, num_workers=%d, cpu_threads=%d, download_root=%s",
