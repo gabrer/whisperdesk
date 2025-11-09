@@ -330,7 +330,12 @@ def diarize(wav_path: str, max_speakers: int = 3, engine: str = 'speechbrain') -
         try:
             embeddings = _extract_embeddings_speechbrain(audio, sr, voiced)
         except Exception as e:
-            logging.warning("SpeechBrain embedding failed (%s); falling back to WeSpeaker ONNX.", e)
+            # Check if this is a frozen build without SpeechBrain bundled
+            error_msg = str(e)
+            if "cannot find the path" in error_msg.lower() and ("speechbrain" in error_msg.lower() or "_internal" in error_msg.lower()):
+                logging.info("SpeechBrain not bundled in this build; using WeSpeaker ONNX fallback")
+            else:
+                logging.warning("SpeechBrain embedding failed (%s); falling back to WeSpeaker ONNX.", e)
             embeddings = None
     else:
         embeddings = None

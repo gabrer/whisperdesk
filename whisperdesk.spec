@@ -17,17 +17,48 @@ datas += collect_all('sklearn')[0]
 datas += collect_all('soundfile')[0]
 hiddenimports += hiddenimports_fw
 
-include_speechbrain = os.environ.get('INCLUDE_SPEECHBRAIN', '0') == '1'
+# SpeechBrain: Enable by default for best diarization quality (set INCLUDE_SPEECHBRAIN=0 to disable)
+include_speechbrain = os.environ.get('INCLUDE_SPEECHBRAIN', '1') == '1'
 if include_speechbrain:
+    print("Including SpeechBrain and PyTorch for high-quality diarization...")
     d2, b2, h2 = collect_all('speechbrain')
     datas += d2
+    binaries += b2
     hiddenimports += h2
+
     d3, b3, h3 = collect_all('torch')
     datas += d3
+    binaries += b3
     hiddenimports += h3
+
     d4, b4, h4 = collect_all('torchaudio')
     datas += d4
+    binaries += b4
     hiddenimports += h4
+
+    # Additional dependencies for SpeechBrain
+    for pkg in ['tqdm', 'hyperpyyaml', 'joblib', 'sentencepiece']:
+        try:
+            d, b, h = collect_all(pkg)
+            datas += d
+            binaries += b
+            hiddenimports += h
+        except Exception:
+            pass
+
+    # Hidden imports for SpeechBrain internal modules
+    hiddenimports += [
+        'speechbrain.inference.speaker',
+        'speechbrain.pretrained',
+        'speechbrain.dataio.dataio',
+        'speechbrain.dataio.dataset',
+        'speechbrain.dataio.encoder',
+        'speechbrain.processing.features',
+        'torch.nn.functional',
+        'torch.utils.data',
+    ]
+else:
+    print("Building without SpeechBrain (WeSpeaker ONNX only for diarization)")
 
 # Include app data
 if os.path.exists('presets.json'):

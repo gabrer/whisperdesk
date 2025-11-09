@@ -830,6 +830,12 @@ class MainWindow(QWidget):
         self.diar_engine.addItems(["Disabled (Whisper only)", "SpeechBrain ECAPA (best)", "WeSpeaker ONNX (light)"])
         eng_to_idx = {"none": 0, "speechbrain": 1, "wespeaker": 2}
         self.diar_engine.setCurrentIndex(eng_to_idx.get(self.cfg.diarization_engine, 1))
+        self.diar_engine.setToolTip(
+            "Speaker diarization engine:\n"
+            "• SpeechBrain: Highest quality (auto-falls back to WeSpeaker in frozen builds)\n"
+            "• WeSpeaker: Lightweight ONNX model (works in all builds)\n"
+            "• Disabled: Whisper transcription only (no speaker separation)"
+        )
         f.addRow("Diarization engine:", self.diar_engine)
         # Device override
         self.device_combo = QComboBox()

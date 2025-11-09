@@ -5,26 +5,38 @@
   - Optional: place diarization ONNX under .\diarization_models\ecapa-voxceleb.onnx for offline diarization
 
   Usage examples:
-    # One-folder build (recommended for offline portability)
+    # One-folder build with SpeechBrain (default, recommended)
     powershell -ExecutionPolicy Bypass -File build.ps1 -Mode onedir
 
-    # One-file build (single exe)
+    # One-file build
     powershell -ExecutionPolicy Bypass -File build.ps1 -Mode onefile
 
-    # Include SpeechBrain (torch+torchaudio) for high-quality diarization
-    powershell -ExecutionPolicy Bypass -File build.ps1 -IncludeSpeechBrain
+    # Build WITHOUT SpeechBrain (smaller, WeSpeaker ONNX only)
+    powershell -ExecutionPolicy Bypass -File build.ps1 -ExcludeSpeechBrain
 #>
 
 param(
   [ValidateSet('onedir','onefile')]
   [string]$Mode = 'onedir',
   [string]$Name = 'WhisperDesk',
-  [switch]$IncludeSpeechBrain,
+  # SpeechBrain now enabled by default for best diarization quality
+  [switch]$IncludeSpeechBrain = $true,
+  [switch]$ExcludeSpeechBrain,
   # When set, build with a visible console (errors will show in console)
   [switch]$Console
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Handle SpeechBrain flag (excluded if explicitly requested)
+if ($ExcludeSpeechBrain) {
+  $IncludeSpeechBrain = $false
+}
+
+Write-Host "Build Configuration:"
+Write-Host "  Mode: $Mode"
+Write-Host "  SpeechBrain: $(if ($IncludeSpeechBrain) { 'Enabled (high-quality diarization)' } else { 'Disabled (WeSpeaker ONNX only)' })"
+Write-Host ""
 
 # Clean
 if (Test-Path dist) { Remove-Item dist -Recurse -Force }
@@ -50,8 +62,30 @@ $collectArgs = @(
   '--collect-all', 'httpx',
   '--collect-all', 'certifi'
 )
+
+# SpeechBrain and PyTorch (enabled by default for best diarization)
 if ($IncludeSpeechBrain) {
-  $collectArgs += @('--collect-all', 'speechbrain', '--collect-all', 'torch', '--collect-all', 'torchaudio')
+  Write-Host "Including SpeechBrain and PyTorch dependencies..."
+  $collectArgs += @(
+    '--collect-all', 'speechbrain',
+    '--collect-all', 'torch',
+    '--collect-all', 'torchaudio',
+    '--collect-all', 'tqdm',
+    '--collect-all', 'hyperpyyaml',
+    '--collect-all', 'joblib',
+    '--collect-all', 'sentencepiece'
+  )
+  # Hidden imports for SpeechBrain internal modules
+  $collectArgs += @(
+    '--hidden-import', 'speechbrain.inference.speaker',
+    '--hidden-import', 'speechbrain.pretrained',
+    '--hidden-import', 'speechbrain.dataio.dataio',
+    '--hidden-import', 'speechbrain.dataio.dataset',
+    '--hidden-import', 'speechbrain.dataio.encoder',
+    '--hidden-import', 'speechbrain.processing.features',
+    '--hidden-import', 'torch.nn.functional',
+    '--hidden-import', 'torch.utils.data'
+  )
 }
 
 pyinstaller --noconfirm `

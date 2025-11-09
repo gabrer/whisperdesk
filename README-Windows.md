@@ -44,25 +44,31 @@ If models are missing at runtime, the app can download them (internet required).
 
 Use the PowerShell script to create a portable app under `dist/`.
 
-- One-folder build (recommended for portability and antivirus friendliness):
+- **One-folder build with SpeechBrain (default, recommended)**:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build.ps1 -Mode onedir
 ```
 
-- Single EXE (one-file):
+This includes SpeechBrain and PyTorch for best diarization quality (~500MB additional size).
+
+- **One-folder build WITHOUT SpeechBrain (smaller)**:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File build.ps1 -Mode onedir -ExcludeSpeechBrain
+```
+
+This uses only WeSpeaker ONNX for diarization (lighter, good quality).
+
+- **Single EXE (one-file)**:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File build.ps1 -Mode onefile
 ```
 
-- Include SpeechBrain (torch+torchaudio) for high-quality diarization (bigger build):
+> **Note:** SpeechBrain is now **included by default** for high-quality speaker diarization. The build will be larger (~500MB) but provides the best results. If you select "SpeechBrain ECAPA" in the GUI and it's not bundled, the app will automatically fall back to WeSpeaker ONNX.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File build.ps1 -IncludeSpeechBrain
-```
-
-> Tip: You can also use `whisperdesk.spec` with `pyinstaller --noconfirm whisperdesk.spec`. Set `INCLUDE_SPEECHBRAIN=1` in the environment to bundle SpeechBrain.
+> **Tip:** You can also use `whisperdesk.spec` with `pyinstaller --noconfirm whisperdesk.spec`. Set `INCLUDE_SPEECHBRAIN=0` to exclude SpeechBrain and reduce build size.
 
 ## 5) Run
 
@@ -72,14 +78,15 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -IncludeSpeechBrain
 ## 6) Offline notes
 
 - If Whisper model folders are present under `models/`, transcription works offline.
-- If `diarization_models/ecapa-voxceleb.onnx` is present, ONNX diarization works offline.
-- SpeechBrain mode requires torch+torchaudio. If not bundled, choose "WeSpeaker ONNX (light)" or disable diarization.
+- If `diarization_models/ecapa-voxceleb.onnx` is present, WeSpeaker ONNX diarization works offline.
+- **SpeechBrain mode** (included by default): Downloads speaker embedding models on first use to `%LOCALAPPDATA%\WhisperDesk\hf-cache`. Once cached, works offline.
+- If you excluded SpeechBrain during build, choose "WeSpeaker ONNX (light)" for diarization.
 
 ## 7) Troubleshooting
 
 - If Windows SmartScreen warns, click More info → Run anyway.
 - If antivirus quarantines the EXE, prefer the one-folder build.
-- If torchaudio import errors occur in SpeechBrain mode, rebuild with `-IncludeSpeechBrain`.
+- **SpeechBrain is now included by default** - no special steps needed for high-quality diarization.
 - If audio resampling fails, install `scipy` (already in requirements.txt).
 
 ### Model downloads hang or freeze
