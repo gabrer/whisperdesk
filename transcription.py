@@ -916,45 +916,77 @@ class Transcriber:
         # Stop download progress timer if it was started
         logging.info("[ModelInit] ============ MODEL LOAD COMPLETE ============")
 
-        # CRITICAL FIX: Explicitly set feature_size for Whisper V3 models
+        # CRITICAL FIX: Replace feature extractor for Whisper V3 models
+        # Setting feature_size attribute doesn't rebuild the mel filterbank - need to replace the entire object
         # Windows doesn't always load preprocessor_config.json correctly, causing 80->128 mismatch
-        # Read num_mel_bins from config.json to be accurate
         if is_v3_model:
             try:
-                logging.info("[ModelInit] Whisper V3 model detected, configuring feature extractor from config.json")
+                logging.info("[ModelInit] Whisper V3 model detected, replacing feature extractor with 128 mel bins")
 
                 # Determine the actual model directory path
                 config_model_dir = model_id if os.path.isdir(model_id) else self.model_dir
 
-                # Read num_mel_bins from config.json
-                config_path = os.path.join(config_model_dir, "config.json")
+                # Read configuration from preprocessor_config.json (preferred) or config.json
                 num_mel_bins = 128  # Default for v3
+                preproc_path = os.path.join(config_model_dir, "preprocessor_config.json")
+                config_path = os.path.join(config_model_dir, "config.json")
 
-                if os.path.isfile(config_path):
+                config_source = None
+                if os.path.isfile(preproc_path):
+                    with open(preproc_path, "r", encoding="utf-8") as f:
+                        preproc_data = json.load(f)
+                        num_mel_bins = preproc_data.get("feature_size", preproc_data.get("num_mel_bins", 128))
+                        config_source = "preprocessor_config.json"
+                elif os.path.isfile(config_path):
                     with open(config_path, "r", encoding="utf-8") as f:
                         config_data = json.load(f)
                         num_mel_bins = config_data.get("num_mel_bins", 128)
-                        logging.info("[ModelInit] Read num_mel_bins=%d from config.json", num_mel_bins)
+                        config_source = "config.json"
+
+                if config_source:
+                    logging.info("[ModelInit] Read num_mel_bins=%d from %s", num_mel_bins, config_source)
                 else:
-                    logging.warning("[ModelInit] config.json not found at %s, using default num_mel_bins=128", config_path)
+                    logging.warning("[ModelInit] No config files found, using default num_mel_bins=128")
 
-                # Apply to feature extractor
-                extractor = getattr(self.model, "feature_extractor", None)
-                if extractor:
-                    old_size = getattr(extractor, "feature_size", None)
-                    extractor.feature_size = num_mel_bins
+                # CRITICAL: Replace the entire feature extractor object with one configured for v3
+                # Simply changing attributes doesn't rebuild the mel filterbank
+                try:
+                    from faster_whisper.feature_extractor import FeatureExtractor  # type: ignore
 
-                    # Also set nb_max_frames if present (v3 uses 3000)
-                    if hasattr(extractor, "nb_max_frames"):
-                        old_frames = getattr(extractor, "nb_max_frames", None)
-                        extractor.nb_max_frames = 3000
-                        logging.info("[ModelInit] Updated nb_max_frames: %s -> 3000", old_frames)
+                    old_extractor = getattr(self.model, "feature_extractor", None)
+                    if old_extractor:
+                        old_size = getattr(old_extractor, "feature_size", None)
+                        logging.info("[ModelInit] Old feature extractor: feature_size=%s", old_size)
 
-                    logging.info("[ModelInit] Updated feature_size: %s -> %d", old_size, num_mel_bins)
-                else:
-                    logging.warning("[ModelInit] No feature_extractor found on model, cannot set feature_size")
+                    # Create new feature extractor with correct parameters for v3
+                    new_extractor = FeatureExtractor(
+                        feature_size=num_mel_bins,
+                        sampling_rate=16000,
+                        hop_length=160,
+                        chunk_length=30,
+                        n_fft=400 if num_mel_bins == 80 else 512,  # v3 uses 512, v2 uses 400
+                    )
+
+                    # Replace the feature extractor on the model
+                    self.model.feature_extractor = new_extractor
+                    logging.info("[ModelInit] Replaced feature extractor: feature_size=%d, n_fft=%d",
+                                num_mel_bins, new_extractor.n_fft)
+
+                except ImportError as import_err:
+                    logging.error("[ModelInit] Cannot import FeatureExtractor: %s", str(import_err))
+                    logging.warning("[ModelInit] Attempting fallback: directly modifying extractor attributes")
+                    # Fallback: try to modify the existing extractor (less reliable)
+                    extractor = getattr(self.model, "feature_extractor", None)
+                    if extractor:
+                        extractor.feature_size = num_mel_bins
+                        if hasattr(extractor, "nb_max_frames"):
+                            extractor.nb_max_frames = 3000
+                        if hasattr(extractor, "n_fft"):
+                            extractor.n_fft = 512
+                        logging.warning("[ModelInit] Applied fallback attribute modifications (may not work)")
+
             except Exception as feat_err:
-                logging.error("[ModelInit] Failed to configure feature_size for V3: %s", str(feat_err), exc_info=True)
+                logging.error("[ModelInit] Failed to configure feature extractor for V3: %s", str(feat_err), exc_info=True)
 
         # Validate tokenizer for Whisper V3 models
         if is_v3_model:
