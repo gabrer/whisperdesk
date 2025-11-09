@@ -524,7 +524,7 @@ class MainWindow(QWidget):
         copyright_label = QLabel(
             f"\u00A9 {current_year} University of Warwick\n"
             f"\u00A9 {current_year} University of Leeds\n"
-            "All rights reserved."
+            "G.P.- All rights reserved."
         )
         copyright_label.setObjectName("caption")
         copyright_label.setWordWrap(True)
