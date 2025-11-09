@@ -917,13 +917,13 @@ class MainWindow(QWidget):
             try:
                 import psutil  # type: ignore
                 avail_gb = psutil.virtual_memory().available / (1024 ** 3)
-                if avail_gb < 8 and self.cfg.num_workers > 1:
+                if avail_gb < 4 and self.cfg.num_workers > 1:
                     self.cfg.num_workers = 1
                     try:
                         self.num_workers_combo.setCurrentIndex(self.cfg.num_workers - 1)
                     except Exception:
                         pass
-                    self.progress_label.setText("ℹ️ Low memory detected (<8 GB available). Using single worker to improve stability.")
+                    self.progress_label.setText("ℹ️ Low memory detected (<4 GB available). Using single worker to improve stability.")
             except Exception:
                 # psutil not present or check failed; ignore
                 pass
