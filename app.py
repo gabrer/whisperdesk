@@ -6,6 +6,7 @@ import glob
 import tempfile
 import threading
 import signal
+import platform
 
 from PySide6.QtCore import QThread, Signal, QUrl, Qt
 from datetime import datetime
@@ -142,14 +143,31 @@ class Worker(QThread):
 
         # Decide parallelization strategy: prefer multiprocessing on CPU; avoid parallel on single GPU
         active_device = getattr(tr, 'active_device', self.cfg.device_mode)
+        logging.info("[Parallel] ========== PARALLELIZATION DECISION ==========")
+        logging.info("[Parallel] active_device=%s", active_device)
+        logging.info("[Parallel] cfg.device_mode=%s", self.cfg.device_mode)
+        logging.info("[Parallel] cfg.num_workers=%d", self.cfg.num_workers)
+        logging.info("[Parallel] len(self.files)=%d", len(self.files))
+        logging.info("[Parallel] Platform: %s", platform.system())
+
         use_parallel = (
             active_device == 'cpu' and
             self.cfg.num_workers > 1 and
             len(self.files) > 1
         )
 
+        logging.info("[Parallel] use_parallel decision: %s", use_parallel)
+        if not use_parallel:
+            if active_device != 'cpu':
+                logging.info("[Parallel] → Reason: active_device='%s' (not CPU)", active_device)
+            elif self.cfg.num_workers <= 1:
+                logging.info("[Parallel] → Reason: num_workers=%d (need >1)", self.cfg.num_workers)
+            elif len(self.files) <= 1:
+                logging.info("[Parallel] → Reason: only %d file(s) (need >1)", len(self.files))
+
         if use_parallel:
             # Build per-file task payloads
+            logging.info("[Parallel] ========== BUILDING PARALLEL TASKS ==========")
             tasks = []
             for wav in self.files:
                 tasks.append({
@@ -167,62 +185,121 @@ class Worker(QThread):
                     "diarization_max_speakers": int(self.cfg.diarization_max_speakers),
                 })
 
+            logging.info("[Parallel] Built %d task(s) for parallel execution", len(tasks))
+            logging.info("[Parallel] Task config: device_mode='cpu', num_workers=1 per task")
+            logging.info("[Parallel] Pool config: max_workers=%d", self.cfg.num_workers)
+
             self.progress_update.emit(
                 f"Processing {len(tasks)} files in parallel on CPU (workers: {self.cfg.num_workers})…",
                 1,
             )
             # Attempt multiprocessing first
+            logging.info("[Parallel] ========== ATTEMPTING MULTIPROCESSING ==========")
             try:
+                logging.info("[Parallel] Creating ProcessPoolExecutor with max_workers=%d", self.cfg.num_workers)
+                logging.info("[Parallel] Initializer: mp_initializer")
+                logging.info("[Parallel] Initializer args: model_name=%s, device='cpu', lang=%s, word_ts=%s, num_workers=1",
+                            self.model_name, self.cfg.language_hint, self.cfg.word_timestamps)
+
                 with ProcessPoolExecutor(
                     max_workers=self.cfg.num_workers,
                     initializer=mp_initializer,
                     initargs=(self.model_name, 'cpu', self.cfg.language_hint, self.cfg.word_timestamps, 1),
                 ) as ex:
+                    logging.info("[Parallel] ProcessPoolExecutor created successfully")
+                    logging.info("[Parallel] Submitting %d tasks to process pool", len(tasks))
                     fut_map = {ex.submit(mp_transcribe_and_export, t): t["wav"] for t in tasks}
+                    logging.info("[Parallel] All tasks submitted, waiting for completion")
+
+                    completed = 0
                     for fut in as_completed(fut_map):
                         wav = fut_map[fut]
                         if self.cancelled:
+                            logging.info("[Parallel] Cancelled by user, breaking")
                             break
                         try:
+                            logging.info("[Parallel] Task completed for: %s", os.path.basename(wav))
                             err = fut.result()
                         except Exception as e:
+                            logging.error("[Parallel] Task raised exception for %s: %s", os.path.basename(wav), str(e))
                             err = str(e)
                         if err:
+                            logging.error("[Parallel] Task returned error for %s: %s", os.path.basename(wav), err)
                             self.file_error.emit(wav, err)
                         else:
+                            logging.info("[Parallel] Task succeeded for: %s", os.path.basename(wav))
                             self.file_done.emit(wav)
                         processed.add(wav)
+                        completed += 1
+                        logging.info("[Parallel] Progress: %d/%d tasks completed", completed, len(tasks))
+
                 parallel_executed = True
+                logging.info("[Parallel] ========== MULTIPROCESSING COMPLETED SUCCESSFULLY ==========")
             except Exception as e:
+                logging.error("[Parallel] ========== MULTIPROCESSING FAILED ==========")
+                logging.error("[Parallel] Exception: %s", str(e))
+                logging.error("[Parallel] Exception type: %s", type(e).__name__)
+                import traceback
+                logging.error("[Parallel] Traceback:\n%s", traceback.format_exc())
                 logging.warning("Multiprocessing failed (%s). Falling back to threads.", e)
+
+                logging.info("[Parallel] ========== ATTEMPTING THREADPOOL ==========")
                 try:
+                    logging.info("[Parallel] Creating ThreadPoolExecutor with max_workers=%d", self.cfg.num_workers)
                     with ThreadPoolExecutor(max_workers=self.cfg.num_workers) as ex:
+                        logging.info("[Parallel] ThreadPoolExecutor created successfully")
+                        logging.info("[Parallel] Submitting %d tasks to thread pool", len(tasks))
                         fut_map = {ex.submit(thread_transcribe_and_export, t): t["wav"] for t in tasks}
+                        logging.info("[Parallel] All tasks submitted to thread pool, waiting for completion")
+
+                        completed = 0
                         for fut in as_completed(fut_map):
                             wav = fut_map[fut]
                             if self.cancelled:
+                                logging.info("[Parallel] Cancelled by user, breaking")
                                 break
                             try:
+                                logging.info("[Parallel] Thread task completed for: %s", os.path.basename(wav))
                                 err = fut.result()
                             except Exception as e2:
+                                logging.error("[Parallel] Thread task raised exception for %s: %s", os.path.basename(wav), str(e2))
                                 err = str(e2)
                             if err:
+                                logging.error("[Parallel] Thread task returned error for %s: %s", os.path.basename(wav), err)
                                 self.file_error.emit(wav, err)
                             else:
+                                logging.info("[Parallel] Thread task succeeded for: %s", os.path.basename(wav))
                                 self.file_done.emit(wav)
                             processed.add(wav)
+                            completed += 1
+                            logging.info("[Parallel] Progress: %d/%d thread tasks completed", completed, len(tasks))
+
                     parallel_executed = True
+                    logging.info("[Parallel] ========== THREADPOOL COMPLETED SUCCESSFULLY ==========")
                 except Exception as e2:
+                    logging.error("[Parallel] ========== THREADPOOL FAILED ==========")
+                    logging.error("[Parallel] Exception: %s", str(e2))
+                    logging.error("[Parallel] Exception type: %s", type(e2).__name__)
+                    import traceback
+                    logging.error("[Parallel] Traceback:\n%s", traceback.format_exc())
                     logging.warning("Thread pool failed (%s). Falling back to sequential.", e2)
 
         # If not using parallel (GPU or single worker) OR pools failed → sequential for remaining files
+        logging.info("[Parallel] ========== SEQUENTIAL EXECUTION CHECK ==========")
+        logging.info("[Parallel] use_parallel=%s, parallel_executed=%s", use_parallel, parallel_executed)
+        logging.info("[Parallel] Files to process: total=%d, already_processed=%d", len(self.files), len(processed))
+
         if (not use_parallel) or (use_parallel and not parallel_executed):
-            for wav in self.files:
-                if wav in processed:
-                    continue
+            remaining = [f for f in self.files if f not in processed]
+            logging.info("[Parallel] Entering sequential execution for %d file(s)", len(remaining))
+
+            for i, wav in enumerate(remaining, 1):
                 if self.cancelled:
+                    logging.info("[Sequential] Cancelled by user, breaking")
                     break
                 try:
+                    logging.info("[Sequential] ========== Processing file %d/%d ==========", i, len(remaining))
+                    logging.info("[Sequential] File: %s", wav)
                     # Show which file is being processed
                     on_progress(f"Processing: {os.path.basename(wav)}...", 0)
                     # Reuse the threaded worker task to run sequentially in this thread
@@ -238,14 +315,25 @@ class Worker(QThread):
                         "diarization_engine": self.cfg.diarization_engine,
                         "diarization_max_speakers": int(self.cfg.diarization_max_speakers),
                     }
+                    logging.info("[Sequential] Task config: device_mode=%s, num_workers=%d",
+                                task["device_mode"], task["num_workers"])
+                    logging.info("[Sequential] Calling thread_transcribe_and_export...")
                     err = thread_transcribe_and_export(task)
                     if err:
+                        logging.error("[Sequential] Task returned error: %s", err)
                         self.file_error.emit(wav, err)
                     else:
+                        logging.info("[Sequential] Task succeeded")
                         self.file_done.emit(wav)
                 except Exception as e:
+                    logging.error("[Sequential] Exception during processing: %s", str(e))
+                    import traceback
+                    logging.error("[Sequential] Traceback:\n%s", traceback.format_exc())
                     self.file_error.emit(wav, str(e))
+        else:
+            logging.info("[Parallel] Sequential execution skipped (parallel was successful)")
 
+        logging.info("[Parallel] ========== ALL PROCESSING COMPLETE ==========")
         self.all_done.emit()
 
 
