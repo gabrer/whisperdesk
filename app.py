@@ -187,22 +187,31 @@ class Worker(QThread):
 
             logging.info("[Parallel] Built %d task(s) for parallel execution", len(tasks))
             logging.info("[Parallel] Task config: device_mode='cpu', num_workers=1 per task")
-            logging.info("[Parallel] Pool config: max_workers=%d", self.cfg.num_workers)
+            logging.info("[Parallel] Pool config: max_workers=%d (requested), will cap at 2", self.cfg.num_workers)
 
+            # Determine effective workers for display
+            effective_workers_display = min(2, self.cfg.num_workers)
             self.progress_update.emit(
-                f"Processing {len(tasks)} files in parallel on CPU (workers: {self.cfg.num_workers})…",
+                f"Processing {len(tasks)} files in parallel on CPU (workers: {effective_workers_display})…",
                 1,
             )
             # Attempt multiprocessing first
             logging.info("[Parallel] ========== ATTEMPTING MULTIPROCESSING ==========")
             try:
-                logging.info("[Parallel] Creating ProcessPoolExecutor with max_workers=%d", self.cfg.num_workers)
+                # Hard cap: never use more than 2 parallel processes to avoid oversubscription
+                # This ensures reasonable performance even on 4-core machines
+                effective_max_workers = min(2, self.cfg.num_workers)
+                if effective_max_workers < self.cfg.num_workers:
+                    logging.info("[Parallel] Capping max_workers from %d to %d to avoid oversubscription",
+                                self.cfg.num_workers, effective_max_workers)
+
+                logging.info("[Parallel] Creating ProcessPoolExecutor with max_workers=%d", effective_max_workers)
                 logging.info("[Parallel] Initializer: mp_initializer")
                 logging.info("[Parallel] Initializer args: model_name=%s, device='cpu', lang=%s, word_ts=%s, num_workers=1",
                             self.model_name, self.cfg.language_hint, self.cfg.word_timestamps)
 
                 with ProcessPoolExecutor(
-                    max_workers=self.cfg.num_workers,
+                    max_workers=effective_max_workers,
                     initializer=mp_initializer,
                     initargs=(self.model_name, 'cpu', self.cfg.language_hint, self.cfg.word_timestamps, 1),
                 ) as ex:
@@ -245,8 +254,14 @@ class Worker(QThread):
 
                 logging.info("[Parallel] ========== ATTEMPTING THREADPOOL ==========")
                 try:
-                    logging.info("[Parallel] Creating ThreadPoolExecutor with max_workers=%d", self.cfg.num_workers)
-                    with ThreadPoolExecutor(max_workers=self.cfg.num_workers) as ex:
+                    # Apply the same hard cap for thread pool
+                    effective_max_workers = min(2, self.cfg.num_workers)
+                    if effective_max_workers < self.cfg.num_workers:
+                        logging.info("[Parallel] Capping thread max_workers from %d to %d to avoid oversubscription",
+                                    self.cfg.num_workers, effective_max_workers)
+
+                    logging.info("[Parallel] Creating ThreadPoolExecutor with max_workers=%d", effective_max_workers)
+                    with ThreadPoolExecutor(max_workers=effective_max_workers) as ex:
                         logging.info("[Parallel] ThreadPoolExecutor created successfully")
                         logging.info("[Parallel] Submitting %d tasks to thread pool", len(tasks))
                         fut_map = {ex.submit(thread_transcribe_and_export, t): t["wav"] for t in tasks}
