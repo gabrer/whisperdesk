@@ -60,7 +60,9 @@ $collectArgs = @(
   '--collect-all', 'soundfile',
   '--collect-all', 'huggingface_hub',
   '--collect-all', 'httpx',
-  '--collect-all', 'certifi'
+  '--collect-all', 'certifi',
+  '--collect-all', 'requests',
+  '--collect-all', 'urllib3'
 )
 
 # SpeechBrain and PyTorch (enabled by default for best diarization)
@@ -73,9 +75,12 @@ if ($IncludeSpeechBrain) {
     '--collect-all', 'tqdm',
     '--collect-all', 'hyperpyyaml',
     '--collect-all', 'joblib',
-    '--collect-all', 'sentencepiece'
+    '--collect-all', 'sentencepiece',
+    '--collect-all', 'huggingface_hub',
+    '--collect-all', 'yaml',
+    '--collect-all', 'ruamel.yaml'
   )
-  # Hidden imports for SpeechBrain internal modules
+  # Hidden imports for SpeechBrain internal modules and dependencies
   $collectArgs += @(
     '--hidden-import', 'speechbrain.inference.speaker',
     '--hidden-import', 'speechbrain.pretrained',
@@ -83,8 +88,13 @@ if ($IncludeSpeechBrain) {
     '--hidden-import', 'speechbrain.dataio.dataset',
     '--hidden-import', 'speechbrain.dataio.encoder',
     '--hidden-import', 'speechbrain.processing.features',
+    '--hidden-import', 'speechbrain.utils.fetching',
+    '--hidden-import', 'speechbrain.utils.data_utils',
     '--hidden-import', 'torch.nn.functional',
-    '--hidden-import', 'torch.utils.data'
+    '--hidden-import', 'torch.utils.data',
+    '--hidden-import', 'requests',
+    '--hidden-import', 'urllib3',
+    '--hidden-import', 'charset_normalizer'
   )
 }
 

@@ -15,7 +15,11 @@ datas += collect_all('ctranslate2')[0]
 datas += collect_all('onnxruntime')[0]
 datas += collect_all('sklearn')[0]
 datas += collect_all('soundfile')[0]
+binaries += collect_all('requests')[1]
+datas += collect_all('urllib3')[0]
+datas += collect_all('certifi')[0]
 hiddenimports += hiddenimports_fw
+hiddenimports += ['requests', 'urllib3', 'charset_normalizer']
 
 # SpeechBrain: Enable by default for best diarization quality (set INCLUDE_SPEECHBRAIN=0 to disable)
 include_speechbrain = os.environ.get('INCLUDE_SPEECHBRAIN', '1') == '1'
@@ -37,7 +41,7 @@ if include_speechbrain:
     hiddenimports += h4
 
     # Additional dependencies for SpeechBrain
-    for pkg in ['tqdm', 'hyperpyyaml', 'joblib', 'sentencepiece']:
+    for pkg in ['tqdm', 'hyperpyyaml', 'joblib', 'sentencepiece', 'yaml', 'ruamel.yaml']:
         try:
             d, b, h = collect_all(pkg)
             datas += d
@@ -46,7 +50,7 @@ if include_speechbrain:
         except Exception:
             pass
 
-    # Hidden imports for SpeechBrain internal modules
+    # Hidden imports for SpeechBrain internal modules and dependencies
     hiddenimports += [
         'speechbrain.inference.speaker',
         'speechbrain.pretrained',
@@ -54,8 +58,13 @@ if include_speechbrain:
         'speechbrain.dataio.dataset',
         'speechbrain.dataio.encoder',
         'speechbrain.processing.features',
+        'speechbrain.utils.fetching',
+        'speechbrain.utils.data_utils',
         'torch.nn.functional',
         'torch.utils.data',
+        'requests',
+        'urllib3',
+        'charset_normalizer',
     ]
 else:
     print("Building without SpeechBrain (WeSpeaker ONNX only for diarization)")
