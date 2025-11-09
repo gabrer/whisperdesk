@@ -99,7 +99,7 @@ hf_hub_download() got an unexpected keyword argument 'use_auth_token'
 
 **Cause:** Older SpeechBrain versions (1.0.0) use deprecated `use_auth_token` parameter incompatible with newer `huggingface_hub`.
 
-**Solution:** Upgrade to SpeechBrain 1.0.1+ which uses the modern `token` parameter:
+**Solution:** The code now includes an automatic runtime compatibility patch that handles this. However, for best results, upgrade your build environment:
 
 ```powershell
 pip install --upgrade "speechbrain>=1.0.1" "huggingface_hub>=0.22.0"
@@ -107,6 +107,8 @@ pip install -r requirements.txt --upgrade
 ```
 
 Then rebuild. **No Hugging Face token is required** for SpeechBrain models - they're public.
+
+**Note:** If you're using an already-built executable and can't rebuild, the runtime patch should handle this automatically on next run.
 
 ### Model downloads hang or freeze
 

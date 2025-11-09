@@ -380,6 +380,41 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
     except Exception as e:
         raise ImportError(f"Failed to import SpeechBrain: {e}")
 
+    # Runtime compatibility patch for huggingface_hub API changes
+    # SpeechBrain 1.0.0 uses 'use_auth_token', newer huggingface_hub expects 'token'
+    # This patch works regardless of which version is bundled
+    try:
+        from huggingface_hub import hf_hub_download
+        import inspect
+
+        # Check if we need the patch (token param exists but use_auth_token doesn't)
+        sig = inspect.signature(hf_hub_download)
+        needs_patch = 'token' in sig.parameters and 'use_auth_token' not in sig.parameters
+
+        if needs_patch:
+            # Patch SpeechBrain's fetch function to translate old -> new parameter
+            import speechbrain.utils.fetching as sb_fetch
+            _original_fetch = sb_fetch.fetch
+
+            def _patched_fetch(filename, source, savedir, overwrite=False, save_filename=None, use_auth_token=None, revision=None):
+                """Wrapper that translates use_auth_token -> token for new huggingface_hub."""
+                # Call original with translated parameter name
+                return _original_fetch(
+                    filename=filename,
+                    source=source,
+                    savedir=savedir,
+                    overwrite=overwrite,
+                    save_filename=save_filename,
+                    token=use_auth_token,  # Translate parameter name
+                    revision=revision
+                )
+
+            sb_fetch.fetch = _patched_fetch
+            logging.info("[Diarization] Applied huggingface_hub compatibility patch (use_auth_token->token)")
+    except Exception as e:
+        # Patch failed, might not be needed or already compatible
+        logging.debug("[Diarization] Compatibility patch not applied: %s", e)
+
     # Determine savedir - check multiple locations
     # 1. Try models/speechbrain_ecapa (standard location)
     # 2. Try models/models--speechbrain--spkrec-ecapa-voxceleb (HF cache format)
