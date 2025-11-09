@@ -18,10 +18,11 @@ certifi>=2024.2.0
 requests>=2.31.0
 urllib3>=2.0.0
 # SpeechBrain for high-quality speaker embeddings
-speechbrain>=1.0.0
-# PyTorch - pinned for SpeechBrain 1.0.3 compatibility (needs torchaudio.list_audio_backends)
-torch>=2.0.0,<2.1.0
-torchaudio>=2.0.0,<2.1.0
+# Use 1.0.1+ for huggingface_hub >=0.20 compatibility (token parameter)
+speechbrain>=1.0.1
+# PyTorch - compatible with SpeechBrain 1.0.1+
+torch>=2.0.0,<2.5.0
+torchaudio>=2.0.0,<2.5.0
 
 # Audio/processing
 numpy>=1.25,<2.0

@@ -89,6 +89,25 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Mode onefile
 - **SpeechBrain is now included by default** - no special steps needed for high-quality diarization.
 - If audio resampling fails, install `scipy` (already in requirements.txt).
 
+### SpeechBrain compatibility issues
+
+**Symptoms:** Error when diarization starts:
+
+```
+hf_hub_download() got an unexpected keyword argument 'use_auth_token'
+```
+
+**Cause:** Older SpeechBrain versions (1.0.0) use deprecated `use_auth_token` parameter incompatible with newer `huggingface_hub`.
+
+**Solution:** Upgrade to SpeechBrain 1.0.1+ which uses the modern `token` parameter:
+
+```powershell
+pip install --upgrade "speechbrain>=1.0.1" "huggingface_hub>=0.22.0"
+pip install -r requirements.txt --upgrade
+```
+
+Then rebuild. **No Hugging Face token is required** for SpeechBrain models - they're public.
+
 ### Model downloads hang or freeze
 
 **Symptoms:** App freezes during model download, especially in bundled .exe builds.
