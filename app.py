@@ -1047,6 +1047,87 @@ def main():
         except Exception as e:
             logging.error("[Startup] Failed to configure SSL certificates: %s", str(e), exc_info=True)
 
+    # Log key runtime/library versions as early as possible for diagnostics
+    try:
+        import platform as _platform
+        import importlib
+        try:
+            # Python and OS
+            logging.info("[Versions] Python: %s (%s)", sys.version.split()[0], sys.executable)
+            logging.info("[Versions] OS: %s", _platform.platform())
+
+            # Helper to resolve package versions robustly
+            try:
+                from importlib import metadata as _metadata  # Python 3.8+
+            except Exception:  # pragma: no cover
+                import importlib_metadata as _metadata  # type: ignore
+
+            def _ver(mod_name: str, pkg_name: str | None = None) -> str | None:
+                """Return version string for module or distribution if available."""
+                try:
+                    mod = importlib.import_module(mod_name)
+                    v = getattr(mod, "__version__", None)
+                    if v:
+                        return str(v)
+                except Exception:
+                    pass
+                try:
+                    return _metadata.version(pkg_name or mod_name)
+                except Exception:
+                    return None
+
+            # GUI
+            logging.info("[Versions] PySide6: %s", _ver("PySide6", "PySide6"))
+
+            # Core ML stack
+            fw_ver = _ver("faster_whisper", "faster-whisper")
+            ct2_ver = _ver("ctranslate2", "ctranslate2")
+            logging.info("[Versions] faster-whisper: %s", fw_ver)
+            logging.info("[Versions] ctranslate2: %s", ct2_ver)
+
+            # Torch (optional)
+            try:
+                import torch as _torch  # type: ignore
+                logging.info(
+                    "[Versions] torch: %s | CUDA available=%s | CUDA runtime=%s",
+                    getattr(_torch, "__version__", None),
+                    _torch.cuda.is_available(),
+                    getattr(getattr(_torch, "version", None), "cuda", None),
+                )
+            except Exception:
+                logging.info("[Versions] torch: not installed")
+
+            # torchaudio (optional)
+            ta_ver = _ver("torchaudio", "torchaudio")
+            logging.info("[Versions] torchaudio: %s", ta_ver)
+
+            # ONNX runtime (diarization)
+            logging.info("[Versions] onnxruntime: %s", _ver("onnxruntime", "onnxruntime"))
+
+            # Hugging Face + HTTP clients
+            logging.info("[Versions] huggingface_hub: %s", _ver("huggingface_hub", "huggingface_hub"))
+            logging.info("[Versions] requests: %s", _ver("requests", "requests"))
+            logging.info("[Versions] httpx: %s", _ver("httpx", "httpx"))
+            logging.info("[Versions] certifi: %s", _ver("certifi", "certifi"))
+
+            # Audio / DSP
+            logging.info("[Versions] numpy: %s", _ver("numpy", "numpy"))
+            logging.info("[Versions] scipy: %s", _ver("scipy", "scipy"))
+            logging.info("[Versions] soundfile: %s", _ver("soundfile", "soundfile"))
+            logging.info("[Versions] webrtcvad: %s", _ver("webrtcvad", "webrtcvad"))
+
+            # NLP/ASR helpers
+            logging.info("[Versions] speechbrain: %s", _ver("speechbrain", "speechbrain"))
+            logging.info("[Versions] python-docx: %s", _ver("docx", "python-docx"))
+
+            # System info helpers
+            logging.info("[Versions] psutil: %s", _ver("psutil", "psutil"))
+            logging.info("[Versions] pynvml: %s", _ver("pynvml", "pynvml"))
+        except Exception as _ver_err:
+            logging.debug("[Versions] Failed to collect some version info: %s", str(_ver_err))
+    except Exception:
+        pass
+
     # Log critical paths for debugging
     logging.info("[Startup] app_root: %s", app_root())
     logging.info("[Startup] models_root: %s", models_root())
