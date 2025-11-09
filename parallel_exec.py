@@ -89,74 +89,96 @@ def mp_initializer(model_name: str, device_mode: str, language_hint: str,
         raise
 
 
-def mp_transcribe_and_export(task: dict) -> dict:
+def mp_transcribe_and_export(task: Dict[str, Any]) -> Optional[str]:
     """Worker function that runs inside a process of the pool.
 
     Reads the task dict to extract parameters, transcribes the audio using the
     global Transcriber from the initializer, then exports the result to disk.
-    Passes through exceptions as-is so as_completed can handle or re-raise.
+    Returns None on success, or an error string on failure.
     """
     import logging
     global _TR_PROCESS
 
     logging.info("[MPWorker] ========== TASK STARTED ==========")
     logging.info("[MPWorker] Process PID: %d", os.getpid())
-    logging.info("[MPWorker] Task audio_file: %s", task.get('audio_file', 'N/A'))
+    logging.info("[MPWorker] Task wav: %s", task.get('wav', 'N/A'))
+    logging.info("[MPWorker] Task model_name: %s", task.get('model_name', 'N/A'))
+    logging.info("[MPWorker] Task device_mode: %s", task.get('device_mode', 'N/A'))
+    logging.info("[MPWorker] Task output_formats: %s", task.get('output_formats', []))
 
     if _TR_PROCESS is None:
         logging.error("[MPWorker] _TR_PROCESS is None - initializer failed!")
-        raise RuntimeError("Process pool worker was not initialised correctly")
+        return "Process pool worker was not initialised correctly"
 
     logging.info("[MPWorker] _TR_PROCESS is available")
 
-    audio_file = task['audio_file']
-    base, ext = os.path.splitext(audio_file)
-    export_cfg = task['export_cfg']
-    txt_file = f"{base}.txt"
-    srt_file = f"{base}.srt"
-
-    logging.info("[MPWorker] Export config: txt_enable=%s, srt_enable=%s",
-                export_cfg.txt_enable, export_cfg.srt_enable)
-
-    # Run actual transcription
-    logging.info("[MPWorker] Starting transcription...")
-    from transcription import Transcriber, TranscriptSegment
-    tr: Transcriber = _TR_PROCESS
     try:
-        result = tr.transcribe_file(audio_file)
-        logging.info("[MPWorker] Transcription complete: %d segments, language=%s",
-                    len(result.segments), result.language)
+        wav = task["wav"]
+        paths = _build_output_paths(wav, task["model_name"], task["output_dir"])
+        logging.info("[MPWorker] Output paths: txt=%s, docx=%s",
+                    paths.get("out_txt"), paths.get("out_docx"))
+
+        # Run ASR transcription
+        logging.info("[MPWorker] Starting ASR transcription...")
+        tr: Transcriber = _TR_PROCESS
+        asr = tr.transcribe(wav)
+        logging.info("[MPWorker] ASR complete: %d segments, duration=%.2f",
+                    len(asr.get("segments", [])), float(asr.get("duration", 0.0)))
+
+        # Diarization
+        logging.info("[MPWorker] Diarization engine: %s, max_speakers: %d",
+                    task["diarization_engine"], task["diarization_max_speakers"])
+
+        if task["diarization_engine"] == 'none' or task["diarization_max_speakers"] <= 1:
+            duration = float(asr.get("duration", 0.0))
+            diar = [(0.0, duration, 0)]
+            logging.info("[MPWorker] Skipping diarization (single speaker mode)")
+        else:
+            logging.info("[MPWorker] Running diarization...")
+            diar = diarize(wav, max_speakers=task["diarization_max_speakers"],
+                          engine=task["diarization_engine"])
+            logging.info("[MPWorker] Diarization complete: %d segments", len(diar))
+
+        # Assign speakers
+        logging.info("[MPWorker] Assigning speakers to ASR segments...")
+        segs = assign_speakers_to_asr(asr["segments"], diar)
+
+        spk_ids = sorted(set([s.get("speaker", 0) for s in segs]))
+        include_speakers = (
+            task["diarization_engine"] != 'none'
+            and task["diarization_max_speakers"] > 1
+            and len(spk_ids) > 1
+        )
+        speaker_map = {i: f"Speaker {i+1}" for i in spk_ids}
+        logging.info("[MPWorker] Speaker assignment complete: %d unique speakers", len(spk_ids))
+
+        include_timestamps = bool(task.get("word_timestamps", False))
+        logging.info("[MPWorker] Export settings: include_speakers=%s, include_timestamps=%s",
+                    include_speakers, include_timestamps)
+
+        # Export
+        if "txt" in task["output_formats"]:
+            logging.info("[MPWorker] Exporting TXT...")
+            export_txt(paths["out_txt"], segs, speaker_map,
+                      include_speakers=include_speakers,
+                      include_timestamps=include_timestamps)
+            logging.info("[MPWorker] TXT export complete: %s", paths["out_txt"])
+        if "docx" in task["output_formats"]:
+            logging.info("[MPWorker] Exporting DOCX...")
+            export_docx(paths["out_docx"], segs, speaker_map,
+                       include_speakers=include_speakers,
+                       include_timestamps=include_timestamps)
+            logging.info("[MPWorker] DOCX export complete: %s", paths["out_docx"])
+
+        logging.info("[MPWorker] Task complete successfully")
+        logging.info("[MPWorker] ========== TASK COMPLETE ==========")
+        return None
     except Exception as e:
-        logging.error("[MPWorker] Transcription failed: %s", str(e))
+        logging.error("[MPWorker] Task failed with exception: %s", str(e))
         import traceback
         logging.error("[MPWorker] Traceback:\n%s", traceback.format_exc())
-        raise
-
-    # Export results
-    logging.info("[MPWorker] Starting export...")
-    try:
-        if export_cfg.txt_enable:
-            exporters.export_txt([result], txt_file)
-            logging.info("[MPWorker] Exported TXT to: %s", txt_file)
-        if export_cfg.srt_enable:
-            exporters.export_srt([result], srt_file)
-            logging.info("[MPWorker] Exported SRT to: %s", srt_file)
-    except Exception as e:
-        logging.error("[MPWorker] Export failed: %s", str(e))
-        import traceback
-        logging.error("[MPWorker] Traceback:\n%s", traceback.format_exc())
-        raise
-
-    # Return summary
-    summary = {
-        'audio_file': audio_file,
-        'text': result.text,
-        'segments': len(result.segments),
-        'language': result.language,
-    }
-    logging.info("[MPWorker] Task complete, returning summary")
-    logging.info("[MPWorker] ========== TASK COMPLETE ==========")
-    return summary
+        logging.info("[MPWorker] ========== TASK FAILED ==========")
+        return str(e)
 
 
 # ------------- Threading support -------------
