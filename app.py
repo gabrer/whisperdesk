@@ -1103,6 +1103,18 @@ class MainWindow(QWidget):
 
 def main():
     """Entry point for the WhisperDesk application."""
+    # CRITICAL: Enable multiprocessing support for frozen Windows builds
+    # This prevents worker processes from re-launching the GUI
+    import multiprocessing
+    if sys.platform == 'win32':
+        multiprocessing.freeze_support()
+        # Set spawn as the start method explicitly for Windows
+        try:
+            multiprocessing.set_start_method('spawn', force=True)
+        except RuntimeError:
+            # Already set, ignore
+            pass
+
     # Set HuggingFace environment variables BEFORE any imports that might use them
     # This must be done at app startup, not in worker threads
     os.environ['HF_HUB_DISABLE_EXPERIMENTAL_WARNING'] = '1'

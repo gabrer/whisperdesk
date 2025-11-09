@@ -884,7 +884,8 @@ class Transcriber:
                     usable = max(1, total_cores - 1)  # Leave 1 core for system
                     if num_workers > 1:
                         # Multiple workers: divide threads among them
-                        cpu_threads_fallback = max(1, usable // num_workers)
+                        # Allow minimum of 2 threads per worker for reasonable performance
+                        cpu_threads_fallback = max(2, usable // num_workers)
                     else:
                         # Single worker: use all available cores (minus 1 for system)
                         cpu_threads_fallback = usable
@@ -918,7 +919,8 @@ class Transcriber:
                 usable = max(1, total_cores - 1)  # Leave 1 core for system
                 if num_workers > 1:
                     # Multiple workers: divide threads among them
-                    cpu_threads_direct = max(1, usable // num_workers)
+                    # Allow minimum of 2 threads per worker for reasonable performance
+                    cpu_threads_direct = max(2, usable // num_workers)
                 else:
                     # Single worker: use all available cores (minus 1 for system)
                     cpu_threads_direct = usable
