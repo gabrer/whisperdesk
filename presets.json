@@ -18,6 +18,6 @@
     "favorite_models": [
       "whisper-medium-en-ct2"
     ],
-    "num_workers": 2
+    "num_workers": 1
   }
 }

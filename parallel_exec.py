@@ -46,9 +46,15 @@ def mp_initializer(model_name: str, device_mode: str, language_hint: str,
     on every task, and constrains intra-op threads to avoid oversubscription.
     """
     global _TR_PROCESS
-    # Limit inner threading to reduce contention across processes
-    os.environ.setdefault('OMP_NUM_THREADS', '1')
-    os.environ.setdefault('MKL_NUM_THREADS', '1')
+    # Configure inner threading to avoid contention across processes
+    try:
+        cores = os.cpu_count() or 4
+        per_proc_threads = max(1, cores // max(1, int(num_workers or 1)))
+        os.environ['OMP_NUM_THREADS'] = str(per_proc_threads)
+        os.environ['MKL_NUM_THREADS'] = str(per_proc_threads)
+    except Exception:
+        os.environ.setdefault('OMP_NUM_THREADS', '1')
+        os.environ.setdefault('MKL_NUM_THREADS', '1')
 
     _TR_PROCESS = Transcriber(
         model_name=model_name,

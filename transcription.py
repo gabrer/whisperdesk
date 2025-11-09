@@ -827,15 +827,17 @@ class Transcriber:
                 try:
                     logging.info("[ModelInit] -------- Attempting GPU model load --------")
                     logging.info("[ModelInit] Attempting to load GPU model with compute_type=%s", ct)
+                    # Resolve cpu_threads for CPU execution; GPU path uses a small fixed thread count for host ops
+                    cpu_threads_gpu_path = 4
                     logging.info("[ModelInit] WhisperModel params: model_id=%s, device=%s, compute_type=%s, num_workers=%d, cpu_threads=%d, download_root=%s",
-                                model_id, device, ct, num_workers, 1 if device == "cpu" else 4, download_root)
+                                model_id, device, ct, num_workers, cpu_threads_gpu_path, download_root)
                     logging.info("[ModelInit] About to call WhisperModel() constructor...")
                     self.model = WhisperModel(
                         model_id,
                         device=device,
                         compute_type=ct,
                         num_workers=num_workers,
-                        cpu_threads=1 if device == "cpu" else 4,
+                        cpu_threads=cpu_threads_gpu_path,
                         download_root=download_root,
                     )
                     logging.info("[ModelInit] WhisperModel() constructor returned successfully")
@@ -876,15 +878,22 @@ class Transcriber:
                 if progress_callback:
                     progress_callback("GPU unavailable/unsupported; falling back to CPU...", 15)
                 logging.info("[ModelInit] Attempting CPU fallback with compute_type=%s", cpu_ct)
-                logging.info("[ModelInit] WhisperModel params: model_id=%s, device=cpu, compute_type=%s, num_workers=%d, cpu_threads=1, download_root=%s",
-                            model_id, cpu_ct, num_workers, download_root)
+                # Compute a reasonable cpu_threads for CPU fallback
+                try:
+                    total_cores = os.cpu_count() or 4
+                    usable = max(1, total_cores - 1)
+                    cpu_threads_fallback = max(1, min(usable, (usable + 1) // 2))
+                except Exception:
+                    cpu_threads_fallback = 1
+                logging.info("[ModelInit] WhisperModel params: model_id=%s, device=cpu, compute_type=%s, num_workers=%d, cpu_threads=%d, download_root=%s",
+                            model_id, cpu_ct, num_workers, cpu_threads_fallback, download_root)
                 logging.info("[ModelInit] About to call WhisperModel() constructor (CPU fallback)...")
                 self.model = WhisperModel(
                     model_id,
                     device="cpu",
                     compute_type=cpu_ct,
                     num_workers=num_workers,
-                    cpu_threads=1,
+                    cpu_threads=cpu_threads_fallback,
                     download_root=download_root,
                 )
                 logging.info("[ModelInit] WhisperModel() constructor returned (CPU fallback)")
@@ -896,15 +905,25 @@ class Transcriber:
             # Non-GPU path: just load with the chosen CPU compute type
             logging.info("[ModelInit] -------- Direct CPU model load (non-GPU path) --------")
             logging.info("[ModelInit] Loading CPU model directly with compute_type=%s", compute_type)
-            logging.info("[ModelInit] WhisperModel params: model_id=%s, device=%s, compute_type=%s, num_workers=%d, cpu_threads=1, download_root=%s",
-                        model_id, device, compute_type, num_workers, download_root)
+            # Compute a reasonable cpu_threads for direct CPU load
+            try:
+                total_cores = os.cpu_count() or 4
+                usable = max(1, total_cores - 1)
+                if num_workers > 1:
+                    cpu_threads_direct = max(1, usable // num_workers)
+                else:
+                    cpu_threads_direct = max(1, min(usable, (usable + 1) // 2))
+            except Exception:
+                cpu_threads_direct = 1
+            logging.info("[ModelInit] WhisperModel params: model_id=%s, device=%s, compute_type=%s, num_workers=%d, cpu_threads=%d, download_root=%s",
+                        model_id, device, compute_type, num_workers, cpu_threads_direct, download_root)
             logging.info("[ModelInit] About to call WhisperModel() constructor (direct CPU)...")
             self.model = WhisperModel(
                 model_id,
                 device=device,
                 compute_type=compute_type,
                 num_workers=num_workers,
-                cpu_threads=1,
+                cpu_threads=cpu_threads_direct,
                 download_root=download_root,
             )
             logging.info("[ModelInit] WhisperModel() constructor returned (direct CPU)")

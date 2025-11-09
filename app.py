@@ -49,8 +49,19 @@ class Worker(QThread):
 
         try:
             on_progress("Initializing model (this may download files if needed)...", 0)
-            # Set environment variable to avoid OpenMP conflicts with Qt
-            os.environ['OMP_NUM_THREADS'] = '1'
+            # Configure OpenMP threads for CPU workloads instead of forcing single-thread
+            try:
+                import multiprocessing
+                cores = os.cpu_count() or multiprocessing.cpu_count() or 4
+                # Derive per-process threads from requested workers to avoid oversubscription
+                per_proc_threads = max(1, cores // max(1, int(self.cfg.num_workers or 1)))
+                os.environ['OMP_NUM_THREADS'] = str(per_proc_threads)
+                os.environ['MKL_NUM_THREADS'] = str(per_proc_threads)
+                logging.info("[Threads] Configured OMP_NUM_THREADS=%s, MKL_NUM_THREADS=%s (cores=%s, cfg.num_workers=%s)",
+                             os.environ.get('OMP_NUM_THREADS'), os.environ.get('MKL_NUM_THREADS'), cores, self.cfg.num_workers)
+            except Exception:
+                # Best-effort; keep defaults
+                pass
 
             # Windows-specific fix: Use a timeout for model initialization
             # to prevent infinite hangs during download
