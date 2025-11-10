@@ -384,6 +384,7 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
     # SpeechBrain 1.0.0 uses 'use_auth_token', newer huggingface_hub expects 'token'
     # This patch works regardless of which version is bundled
     try:
+        import huggingface_hub
         from huggingface_hub import hf_hub_download
         import inspect
 
@@ -392,24 +393,40 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
         needs_patch = 'token' in sig.parameters and 'use_auth_token' not in sig.parameters
 
         if needs_patch:
-            # Patch SpeechBrain's fetch function to translate old -> new parameter
-            import speechbrain.utils.fetching as sb_fetch
-            _original_fetch = sb_fetch.fetch
+            # Store the original hf_hub_download function
+            _original_hf_hub_download = hf_hub_download
+            
+            def _patched_hf_hub_download(*args, **kwargs):
+                """Wrapper that translates use_auth_token -> token for backward compatibility."""
+                # If use_auth_token is passed, rename it to token
+                if 'use_auth_token' in kwargs:
+                    kwargs['token'] = kwargs.pop('use_auth_token')
+                return _original_hf_hub_download(*args, **kwargs)
+            
+            # Patch both the module and the import
+            huggingface_hub.hf_hub_download = _patched_hf_hub_download
+            
+            # Also patch SpeechBrain's fetch function if it exists
+            try:
+                import speechbrain.utils.fetching as sb_fetch
+                _original_fetch = sb_fetch.fetch
 
-            def _patched_fetch(filename, source, savedir, overwrite=False, save_filename=None, use_auth_token=None, revision=None):
-                """Wrapper that translates use_auth_token -> token for new huggingface_hub."""
-                # Call original with translated parameter name
-                return _original_fetch(
-                    filename=filename,
-                    source=source,
-                    savedir=savedir,
-                    overwrite=overwrite,
-                    save_filename=save_filename,
-                    token=use_auth_token,  # Translate parameter name
-                    revision=revision
-                )
+                def _patched_fetch(filename, source, savedir, overwrite=False, save_filename=None, use_auth_token=None, revision=None):
+                    """Wrapper that translates use_auth_token -> token for new huggingface_hub."""
+                    return _original_fetch(
+                        filename=filename,
+                        source=source,
+                        savedir=savedir,
+                        overwrite=overwrite,
+                        save_filename=save_filename,
+                        token=use_auth_token,  # Translate parameter name
+                        revision=revision
+                    )
 
-            sb_fetch.fetch = _patched_fetch
+                sb_fetch.fetch = _patched_fetch
+            except Exception:
+                pass  # SpeechBrain fetch patch optional
+            
             logging.info("[Diarization] Applied huggingface_hub compatibility patch (use_auth_token->token)")
     except Exception as e:
         # Patch failed, might not be needed or already compatible
