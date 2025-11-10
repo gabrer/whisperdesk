@@ -8,11 +8,166 @@ This module defers heavy imports so the application can import even if optional
 dependencies are not installed. When diarization is disabled (max_speakers <= 1)
 or dependencies are missing, it returns a single-speaker fallback.
 """
+import functools
+import inspect
 import logging
 import os
 from typing import List, Dict, Any, Tuple, Optional
 
 from utils import diarization_root, models_root
+
+
+def _ensure_hf_download_tracing():
+    """Wrap hf_hub_download so we know exactly which file failed."""
+    try:
+        import huggingface_hub
+    except Exception as exc:
+        logging.debug("[Diarization] huggingface_hub not available for tracing: %s", exc)
+        return
+
+    if getattr(huggingface_hub, "_whisperdesk_hf_tracing", False):
+        return
+
+    original_fn = huggingface_hub.hf_hub_download
+    try:
+        original_sig = inspect.signature(original_fn)
+    except (TypeError, ValueError):
+        original_sig = None
+
+    needs_auth_patch = False
+    if original_sig is not None:
+        params = original_sig.parameters
+        needs_auth_patch = ("token" in params) and ("use_auth_token" not in params)
+        if needs_auth_patch:
+            logging.info("[Diarization] Enabling hf_hub_download compatibility shim (use_auth_token->token)")
+
+    @functools.wraps(original_fn)
+    def _patched_hf_hub_download(*args, **kwargs):
+        repo_id = kwargs.get("repo_id")
+        filename = kwargs.get("filename")
+        revision = kwargs.get("revision") or kwargs.get("repo_revision")
+        local_files_only = kwargs.get("local_files_only")
+        cache_dir = kwargs.get("cache_dir")
+        local_dir = kwargs.get("local_dir")
+        allow_patterns = kwargs.get("allow_patterns")
+
+        if repo_id is None and args:
+            repo_id = args[0]
+        if filename is None and len(args) > 1:
+            filename = args[1]
+        if revision is None and len(args) > 2:
+            revision = args[2]
+
+        log_prefix = "[Diarization][HFDownload]"
+        logging.info(
+            "%s Request repo=%s file=%s revision=%s offline=%s cache_dir=%s local_dir=%s allow_patterns=%s",
+            log_prefix,
+            repo_id or "<unknown>",
+            filename or "<unknown>",
+            revision or "main",
+            local_files_only,
+            cache_dir or "<default>",
+            local_dir or "<default>",
+            allow_patterns if allow_patterns is not None else "<all>",
+        )
+
+        if needs_auth_patch and "use_auth_token" in kwargs:
+            kwargs["token"] = kwargs.pop("use_auth_token")
+
+        try:
+            path = original_fn(*args, **kwargs)
+            logging.info(
+                "%s Success repo=%s file=%s -> %s",
+                log_prefix,
+                repo_id or "<unknown>",
+                filename or "<unknown>",
+                path,
+            )
+            return path
+        except Exception as exc:  # pragma: no cover - diagnostic logging
+            logging.error(
+                "%s Failure repo=%s file=%s revision=%s offline=%s: %s",
+                log_prefix,
+                repo_id or "<unknown>",
+                filename or "<unknown>",
+                revision or "main",
+                local_files_only,
+                exc,
+            )
+            raise
+
+    huggingface_hub.hf_hub_download = _patched_hf_hub_download
+    import sys
+
+    sys.modules["huggingface_hub"].hf_hub_download = huggingface_hub.hf_hub_download
+    setattr(huggingface_hub, "_whisperdesk_hf_tracing", True)
+
+
+def _log_speechbrain_savedir_state(savedir: str, required_files: List[str], context: str) -> None:
+    """Emit detailed info about the SpeechBrain directory to simplify troubleshooting."""
+    try:
+        exists = os.path.isdir(savedir)
+        readable = os.access(savedir, os.R_OK) if exists else False
+        writable = os.access(savedir, os.W_OK) if exists else os.access(os.path.dirname(savedir) or ".", os.W_OK)
+        logging.info(
+            "[Diarization][SpeechBrainDiag] %s | path=%s | exists=%s | readable=%s | writable=%s",
+            context,
+            savedir,
+            exists,
+            readable,
+            writable,
+        )
+
+        env_vars = {
+            "LOCALAPPDATA": os.getenv("LOCALAPPDATA"),
+            "HF_HOME": os.getenv("HF_HOME"),
+            "HUGGINGFACE_HUB_CACHE": os.getenv("HUGGINGFACE_HUB_CACHE"),
+            "HF_HUB_OFFLINE": os.getenv("HF_HUB_OFFLINE"),
+            "TRANSFORMERS_CACHE": os.getenv("TRANSFORMERS_CACHE"),
+        }
+        token_keys = ("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN")
+        for key in token_keys:
+            env_vars[key] = "<set>" if os.getenv(key) else "<unset>"
+
+        env_desc = ", ".join(f"{k}={v or '<unset>'}" for k, v in env_vars.items())
+        logging.info("[Diarization][SpeechBrainDiag] Env vars: %s", env_desc)
+
+        if exists:
+            try:
+                entries = sorted(os.listdir(savedir))
+                preview = entries[:8]
+                logging.info(
+                    "[Diarization][SpeechBrainDiag] Directory contains %d item(s); preview=%s",
+                    len(entries),
+                    preview,
+                )
+            except Exception as exc:
+                logging.debug("[Diarization][SpeechBrainDiag] Failed to list %s: %s", savedir, exc)
+        else:
+            parent = os.path.dirname(savedir) or "."
+            logging.info(
+                "[Diarization][SpeechBrainDiag] Parent dir %s exists=%s writable=%s",
+                parent,
+                os.path.isdir(parent),
+                os.access(parent, os.W_OK),
+            )
+
+        for fname in required_files:
+            fpath = os.path.join(savedir, fname)
+            if os.path.exists(fpath):
+                try:
+                    size = os.path.getsize(fpath)
+                except OSError:
+                    size = -1
+                logging.info(
+                    "[Diarization][SpeechBrainDiag] %s present%s",
+                    fname,
+                    f" ({size} bytes)" if size >= 0 else "",
+                )
+            else:
+                logging.info("[Diarization][SpeechBrainDiag] %s missing", fname)
+    except Exception as exc:  # pragma: no cover - diagnostic logging
+        logging.debug("[Diarization][SpeechBrainDiag] Failed to record directory state: %s", exc)
 
 
 def ensure_ecapa_model(progress_callback=None) -> bool:
@@ -374,40 +529,8 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
     import numpy as np
     import torch
 
-    # CRITICAL: Apply compatibility patch BEFORE importing SpeechBrain
-    # SpeechBrain 1.0.0 uses 'use_auth_token', newer huggingface_hub expects 'token'
-    # Must patch before SpeechBrain imports huggingface_hub
-    try:
-        import huggingface_hub
-        from huggingface_hub import hf_hub_download
-        import inspect
-
-        # Check if we need the patch (token param exists but use_auth_token doesn't)
-        sig = inspect.signature(hf_hub_download)
-        needs_patch = 'token' in sig.parameters and 'use_auth_token' not in sig.parameters
-
-        if needs_patch:
-            # Store the original hf_hub_download function
-            _original_hf_hub_download = hf_hub_download
-
-            def _patched_hf_hub_download(*args, **kwargs):
-                """Wrapper that translates use_auth_token -> token for backward compatibility."""
-                # If use_auth_token is passed, rename it to token
-                if 'use_auth_token' in kwargs:
-                    kwargs['token'] = kwargs.pop('use_auth_token')
-                return _original_hf_hub_download(*args, **kwargs)
-
-            # Patch at module level - must happen before SpeechBrain import
-            huggingface_hub.hf_hub_download = _patched_hf_hub_download
-            # Also replace in sys.modules to catch all references
-            import sys
-            if 'huggingface_hub' in sys.modules:
-                sys.modules['huggingface_hub'].hf_hub_download = _patched_hf_hub_download
-
-            logging.info("[Diarization] Applied huggingface_hub compatibility patch (use_auth_token->token)")
-    except Exception as e:
-        # Patch failed, might not be needed or already compatible
-        logging.debug("[Diarization] Compatibility patch not applied: %s", e)
+    # Make sure hf_hub_download is instrumented before SpeechBrain imports it
+    _ensure_hf_download_tracing()
 
     # NOW import SpeechBrain - it will see the patched hf_hub_download
     try:
@@ -467,6 +590,9 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
         else:
             logging.info("[Diarization] Model directory exists but missing %s, will download", ", ".join(missing))
 
+    if not model_exists:
+        _log_speechbrain_savedir_state(savedir, required_files, "Pre-download check")
+
     # Load pretrained ECAPA model
     try:
         if model_exists:
@@ -485,6 +611,11 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
             )
     except Exception as e:
         logging.error("[Diarization] Failed to load SpeechBrain model from %s: %s", savedir, e)
+        _log_speechbrain_savedir_state(savedir, required_files, "Load failure diagnostics")
+        logging.error(
+            "[Diarization] To pre-warm SpeechBrain offline, run: python scripts/download_speechbrain.py --target \"%s\"",
+            savedir,
+        )
         raise
 
     embeddings = []
