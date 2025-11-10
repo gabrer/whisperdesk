@@ -374,15 +374,9 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
     import numpy as np
     import torch
 
-    # Import SpeechBrain with error handling
-    try:
-        from speechbrain.inference.speaker import EncoderClassifier
-    except Exception as e:
-        raise ImportError(f"Failed to import SpeechBrain: {e}")
-
-    # Runtime compatibility patch for huggingface_hub API changes
+    # CRITICAL: Apply compatibility patch BEFORE importing SpeechBrain
     # SpeechBrain 1.0.0 uses 'use_auth_token', newer huggingface_hub expects 'token'
-    # This patch works regardless of which version is bundled
+    # Must patch before SpeechBrain imports huggingface_hub
     try:
         import huggingface_hub
         from huggingface_hub import hf_hub_download
@@ -395,42 +389,31 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
         if needs_patch:
             # Store the original hf_hub_download function
             _original_hf_hub_download = hf_hub_download
-            
+
             def _patched_hf_hub_download(*args, **kwargs):
                 """Wrapper that translates use_auth_token -> token for backward compatibility."""
                 # If use_auth_token is passed, rename it to token
                 if 'use_auth_token' in kwargs:
                     kwargs['token'] = kwargs.pop('use_auth_token')
                 return _original_hf_hub_download(*args, **kwargs)
-            
-            # Patch both the module and the import
+
+            # Patch at module level - must happen before SpeechBrain import
             huggingface_hub.hf_hub_download = _patched_hf_hub_download
-            
-            # Also patch SpeechBrain's fetch function if it exists
-            try:
-                import speechbrain.utils.fetching as sb_fetch
-                _original_fetch = sb_fetch.fetch
+            # Also replace in sys.modules to catch all references
+            import sys
+            if 'huggingface_hub' in sys.modules:
+                sys.modules['huggingface_hub'].hf_hub_download = _patched_hf_hub_download
 
-                def _patched_fetch(filename, source, savedir, overwrite=False, save_filename=None, use_auth_token=None, revision=None):
-                    """Wrapper that translates use_auth_token -> token for new huggingface_hub."""
-                    return _original_fetch(
-                        filename=filename,
-                        source=source,
-                        savedir=savedir,
-                        overwrite=overwrite,
-                        save_filename=save_filename,
-                        token=use_auth_token,  # Translate parameter name
-                        revision=revision
-                    )
-
-                sb_fetch.fetch = _patched_fetch
-            except Exception:
-                pass  # SpeechBrain fetch patch optional
-            
             logging.info("[Diarization] Applied huggingface_hub compatibility patch (use_auth_token->token)")
     except Exception as e:
         # Patch failed, might not be needed or already compatible
         logging.debug("[Diarization] Compatibility patch not applied: %s", e)
+
+    # NOW import SpeechBrain - it will see the patched hf_hub_download
+    try:
+        from speechbrain.inference.speaker import EncoderClassifier
+    except Exception as e:
+        raise ImportError(f"Failed to import SpeechBrain: {e}")
 
     # Determine savedir - check multiple locations
     # 1. Try models/speechbrain_ecapa (standard location)
@@ -477,24 +460,34 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
         raise
 
     embeddings = []
-    for (start, end) in voiced_segments:
-        s = max(0, int(start * sr))
-        e = min(len(audio), int(end * sr))
-        segment = audio[s:e].astype(np.float32) / 32768.0
+    for idx, (start, end) in enumerate(voiced_segments):
+        try:
+            s = max(0, int(start * sr))
+            e = min(len(audio), int(end * sr))
+            segment = audio[s:e].astype(np.float32) / 32768.0
 
-        # Skip silent/empty segments
-        if len(segment) < 100 or np.abs(segment).max() < 1e-6:
-            # Use a small random embedding for silent segments
+            # Skip silent/empty segments
+            if len(segment) < 100 or np.abs(segment).max() < 1e-6:
+                # Use a small random embedding for silent segments
+                emb_np = np.random.randn(192).astype(np.float32) * 0.01
+            else:
+                # SpeechBrain expects torch tensor
+                waveform = torch.from_numpy(segment).unsqueeze(0)  # (1, samples)
+
+                with torch.no_grad():
+                    emb = classifier.encode_batch(waveform)
+                    emb_np = emb.squeeze().cpu().numpy()
+
+            embeddings.append(emb_np)
+        except Exception as e:
+            # If segment embedding fails, use random embedding to avoid breaking entire diarization
+            logging.warning("[Diarization] Failed to extract embedding for segment %d (%.2f-%.2f): %s. Using random fallback.",
+                          idx, start, end, e)
             emb_np = np.random.randn(192).astype(np.float32) * 0.01
-        else:
-            # SpeechBrain expects torch tensor
-            waveform = torch.from_numpy(segment).unsqueeze(0)  # (1, samples)
+            embeddings.append(emb_np)
 
-            with torch.no_grad():
-                emb = classifier.encode_batch(waveform)
-                emb_np = emb.squeeze().cpu().numpy()
-
-        embeddings.append(emb_np)
+    if not embeddings:
+        raise RuntimeError("No embeddings extracted from any voiced segment")
 
     return np.stack(embeddings, axis=0)
 
