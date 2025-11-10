@@ -448,13 +448,34 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
     if savedir is None:
         savedir = os.path.join(models_root(), "speechbrain_ecapa")
         logging.info("[Diarization] No existing SpeechBrain model found, will download to: %s", savedir)
+        model_exists = False
+    else:
+        # Check if model files actually exist
+        model_exists = all(
+            os.path.exists(os.path.join(savedir, f))
+            for f in ["hyperparams.yaml", "embedding_model.ckpt"]
+        )
+        if model_exists:
+            logging.info("[Diarization] Model files verified in: %s", savedir)
+        else:
+            logging.info("[Diarization] Model directory exists but files incomplete, will download")
 
     # Load pretrained ECAPA model
     try:
-        classifier = EncoderClassifier.from_hparams(
-            source="speechbrain/spkrec-ecapa-voxceleb",
-            savedir=savedir
-        )
+        if model_exists:
+            # Load from local files only (offline mode)
+            logging.info("[Diarization] Loading SpeechBrain model from local files (offline)")
+            classifier = EncoderClassifier.from_hparams(
+                source=savedir,  # Use local path as source for offline loading
+                savedir=savedir
+            )
+        else:
+            # Download from HuggingFace Hub
+            logging.info("[Diarization] Downloading SpeechBrain model from HuggingFace Hub")
+            classifier = EncoderClassifier.from_hparams(
+                source="speechbrain/spkrec-ecapa-voxceleb",
+                savedir=savedir
+            )
     except Exception as e:
         logging.error("[Diarization] Failed to load SpeechBrain model from %s: %s", savedir, e)
         raise
