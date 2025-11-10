@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 import platform
+from functools import lru_cache
 
 
 # Paths
@@ -22,11 +23,11 @@ def app_root() -> str:
 
 
 def models_root() -> str:
-    return os.path.join(app_root(), "models")
+    return _resolve_resource_dir("models", "WHISPERDESK_MODELS_DIR")
 
 
 def diarization_root() -> str:
-    return os.path.join(app_root(), "diarization_models")
+    return _resolve_resource_dir("diarization_models", "WHISPERDESK_DIARIZATION_DIR")
 
 
 def hf_cache_root() -> str:
@@ -164,3 +165,58 @@ def format_ts(seconds: float) -> str:
 
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+@lru_cache(maxsize=None)
+def _resolve_resource_dir(subdir: str, env_var: str) -> str:
+    """Locate bundled resources in both source runs and frozen builds."""
+    candidates: list[Path] = []
+
+    # Explicit override via environment variable (primarily for testing/support)
+    env_value = os.environ.get(env_var)
+    if env_value:
+        candidates.append(Path(env_value).expanduser())
+
+    # Standard locations relative to the import root
+    base_dir = Path(app_root())
+    candidates.append(base_dir / subdir)
+
+    try:
+        module_dir = Path(__file__).resolve().parent
+        candidates.append(module_dir / subdir)
+    except Exception:
+        pass
+
+    # When running from a PyInstaller bundle, data may live next to the executable
+    if getattr(sys, "frozen", False):
+        try:
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates.append(exe_dir / subdir)
+        except Exception:
+            pass
+
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            meipass_path = Path(meipass)
+            candidates.append(meipass_path / subdir)
+            candidates.append(meipass_path.parent / subdir)
+
+    # Fallback to current working directory to aid local testing
+    candidates.append(Path.cwd() / subdir)
+
+    seen: set[str] = set()
+    for path in candidates:
+        if not path:
+            continue
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            if path.exists():
+                return key
+        except OSError:
+            continue
+
+    # Nothing found; default to app_root/subdir so the caller knows where to place files.
+    return str(base_dir / subdir)

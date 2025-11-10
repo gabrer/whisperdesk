@@ -37,6 +37,9 @@ To avoid network access at runtime, place models in these folders before buildin
     ```
 - Diarization ONNX (WeSpeaker ResNet34)
   - Save as `diarization_models/ecapa-voxceleb.onnx`
+- SpeechBrain ECAPA (high-quality diarization)
+  - Run `python scripts/download_speechbrain.py` to create/populate `models/speechbrain_ecapa`
+  - The build script runs this automatically when SpeechBrain is enabled, so manual download is only required if you skip the script
 
 If models are missing at runtime, the app can download them (internet required).
 
@@ -68,6 +71,8 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Mode onefile
 
 > **Note:** SpeechBrain is now **included by default** for high-quality speaker diarization. The build will be larger (~500MB) but provides the best results. If you select "SpeechBrain ECAPA" in the GUI and it's not bundled, the app will automatically fall back to WeSpeaker ONNX.
 
+> The build script now pre-downloads the SpeechBrain ECAPA checkpoint (using `scripts/download_speechbrain.py`) so fresh builds work offline without any manual steps.
+
 > **Tip:** You can also use `whisperdesk.spec` with `pyinstaller --noconfirm whisperdesk.spec`. Set `INCLUDE_SPEECHBRAIN=0` to exclude SpeechBrain and reduce build size.
 
 ## 5) Run
@@ -79,7 +84,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Mode onefile
 
 - If Whisper model folders are present under `models/`, transcription works offline.
 - If `diarization_models/ecapa-voxceleb.onnx` is present, WeSpeaker ONNX diarization works offline.
-- **SpeechBrain mode** (included by default): Downloads speaker embedding models on first use to `%LOCALAPPDATA%\WhisperDesk\hf-cache`. Once cached, works offline.
+- **SpeechBrain mode** (included by default): `build.ps1` bundles the ECAPA checkpoint under `models/speechbrain_ecapa`, so SpeechBrain diarization works offline immediately. If you're running from source without the build script, execute `python scripts/download_speechbrain.py` once to populate that folder.
 - If you excluded SpeechBrain during build, choose "WeSpeaker ONNX (light)" for diarization.
 
 ## 7) Troubleshooting

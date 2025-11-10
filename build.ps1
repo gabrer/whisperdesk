@@ -44,13 +44,6 @@ if (Test-Path build) { Remove-Item build -Recurse -Force }
 
 $modeSwitch = if ($Mode -eq 'onefile') { '--onefile' } else { '--onedir' }
 
-# Required data files
-$dataArgs = @(
-  '--add-data', 'presets.json;.'
-)
-if (Test-Path 'models') { $dataArgs += @('--add-data', 'models;models') }
-if (Test-Path 'diarization_models') { $dataArgs += @('--add-data', 'diarization_models;diarization_models') }
-
 # Package collection (ensure runtime resources are included)
 $collectArgs = @(
   '--collect-all', 'faster_whisper',
@@ -96,7 +89,27 @@ if ($IncludeSpeechBrain) {
     '--hidden-import', 'urllib3',
     '--hidden-import', 'charset_normalizer'
   )
+
+  # Ensure SpeechBrain checkpoint files are present so the bundle works offline
+  $speechBrainScript = Join-Path $PSScriptRoot 'scripts\download_speechbrain.py'
+  if (Test-Path $speechBrainScript) {
+    $speechBrainDir = Join-Path $PSScriptRoot 'models\speechbrain_ecapa'
+    Write-Host "Preparing SpeechBrain ECAPA checkpoint at $speechBrainDir ..."
+    python $speechBrainScript --target "$speechBrainDir"
+    if ($LASTEXITCODE -ne 0) {
+      throw "Failed to download SpeechBrain weights. Check your network connection or run with -ExcludeSpeechBrain."
+    }
+  } else {
+    Write-Warning "SpeechBrain download script not found: $speechBrainScript"
+  }
 }
+
+# Required data files (evaluated after optional resource downloads)
+$dataArgs = @(
+  '--add-data', 'presets.json;.'
+)
+if (Test-Path 'models') { $dataArgs += @('--add-data', 'models;models') }
+if (Test-Path 'diarization_models') { $dataArgs += @('--add-data', 'diarization_models;diarization_models') }
 
 pyinstaller --noconfirm `
   $modeSwitch `
