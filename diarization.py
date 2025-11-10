@@ -445,20 +445,27 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
                 break
 
     # If no existing model found, use default location and let SpeechBrain download
+    required_files = [
+        "hyperparams.yaml",
+        "embedding_model.ckpt",
+        "classifier.ckpt",
+        "label_encoder.ckpt",
+        "mean_var_norm_emb.ckpt",
+        "label_encoder.txt",
+    ]
+
     if savedir is None:
         savedir = os.path.join(models_root(), "speechbrain_ecapa")
         logging.info("[Diarization] No existing SpeechBrain model found, will download to: %s", savedir)
         model_exists = False
     else:
         # Check if model files actually exist
-        model_exists = all(
-            os.path.exists(os.path.join(savedir, f))
-            for f in ["hyperparams.yaml", "embedding_model.ckpt"]
-        )
+        missing = [f for f in required_files if not os.path.exists(os.path.join(savedir, f))]
+        model_exists = not missing
         if model_exists:
             logging.info("[Diarization] Model files verified in: %s", savedir)
         else:
-            logging.info("[Diarization] Model directory exists but files incomplete, will download")
+            logging.info("[Diarization] Model directory exists but missing %s, will download", ", ".join(missing))
 
     # Load pretrained ECAPA model
     try:

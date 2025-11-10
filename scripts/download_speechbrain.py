@@ -18,6 +18,7 @@ REQUIRED_FILES: Sequence[str] = (
     "embedding_model.ckpt",
     "label_encoder.ckpt",
     "mean_var_norm_emb.ckpt",
+    "label_encoder.txt",
 )
 
 
