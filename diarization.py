@@ -575,6 +575,7 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
         "label_encoder.ckpt",
         "mean_var_norm_emb.ckpt",
         "label_encoder.txt",
+        "custom.py",
     ]
 
     if savedir is None:

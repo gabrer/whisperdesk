@@ -19,6 +19,7 @@ REQUIRED_FILES: Sequence[str] = (
     "label_encoder.ckpt",
     "mean_var_norm_emb.ckpt",
     "label_encoder.txt",
+    "custom.py",
 )
 
 
