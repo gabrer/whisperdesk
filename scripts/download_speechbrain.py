@@ -16,9 +16,9 @@ REQUIRED_FILES: Sequence[str] = (
     "hyperparams.yaml",
     "classifier.ckpt",
     "embedding_model.ckpt",
-    "label_encoder.ckpt",
     "mean_var_norm_emb.ckpt",
     "label_encoder.txt",
+    "label_encoder.ckpt",
     "custom.py",
 )
 

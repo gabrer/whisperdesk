@@ -19,6 +19,7 @@ from utils import diarization_root, models_root
 
 def _ensure_hf_download_tracing():
     """Wrap hf_hub_download so we know exactly which file failed."""
+    logging.debug("[Diarization] Ensuring hf_hub_download tracing hook is installed")
     try:
         import huggingface_hub
     except Exception as exc:
@@ -26,7 +27,10 @@ def _ensure_hf_download_tracing():
         return
 
     if getattr(huggingface_hub, "_whisperdesk_hf_tracing", False):
+        logging.debug("[Diarization] hf_hub_download tracing already active")
         return
+
+    logging.info("[Diarization] Installing hf_hub_download tracing shim")
 
     original_fn = huggingface_hub.hf_hub_download
     try:
@@ -101,6 +105,7 @@ def _ensure_hf_download_tracing():
 
     sys.modules["huggingface_hub"].hf_hub_download = huggingface_hub.hf_hub_download
     setattr(huggingface_hub, "_whisperdesk_hf_tracing", True)
+    logging.info("[Diarization] hf_hub_download tracing shim installed successfully")
 
 
 def _log_speechbrain_savedir_state(savedir: str, required_files: List[str], context: str) -> None:
@@ -529,12 +534,48 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
     import numpy as np
     import torch
 
+    logging.info(
+        "[Diarization][SpeechBrain] Preparing embedding extraction | sr=%s | audio_len=%s | dtype=%s | segments=%s",
+        sr,
+        len(audio),
+        getattr(audio, "dtype", type(audio)),
+        len(voiced_segments),
+    )
+    if voiced_segments:
+        durations = [max(0.0, end - start) for start, end in voiced_segments]
+        logging.info(
+            "[Diarization][SpeechBrain] Segment duration stats | min=%.2fs | max=%.2fs | avg=%.2fs",
+            min(durations),
+            max(durations),
+            sum(durations) / max(1, len(durations)),
+        )
+    else:
+        logging.info("[Diarization][SpeechBrain] No voiced segments provided; expecting fallback later")
+
+    torch_cuda = bool(getattr(torch, "cuda", None) and torch.cuda.is_available())
+    torch_mps = False
+    try:
+        torch_mps = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+    except Exception:
+        pass
+    logging.info(
+        "[Diarization][SpeechBrain] torch_version=%s | cuda_available=%s | mps_available=%s",
+        getattr(torch, "__version__", "<unknown>"),
+        torch_cuda,
+        torch_mps,
+    )
+
     # Make sure hf_hub_download is instrumented before SpeechBrain imports it
     _ensure_hf_download_tracing()
 
     # NOW import SpeechBrain - it will see the patched hf_hub_download
     try:
+        import speechbrain  # type: ignore
         from speechbrain.inference.speaker import EncoderClassifier
+        logging.info(
+            "[Diarization][SpeechBrain] speechbrain_version=%s",
+            getattr(speechbrain, "__version__", "<unknown>"),
+        )
     except Exception as e:
         raise ImportError(f"Failed to import SpeechBrain: {e}")
 
@@ -548,7 +589,9 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
     ]
 
     savedir = None
+    logging.info("[Diarization][SpeechBrain] Checking %d potential savedir locations", len(savedir_candidates))
     for candidate in savedir_candidates:
+        logging.info("[Diarization][SpeechBrain] Inspecting candidate: %s", candidate)
         if os.path.isdir(candidate):
             # For HF snapshot directories, find the latest snapshot
             if "snapshots" in candidate:
@@ -566,17 +609,24 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
                 savedir = candidate
                 logging.info("[Diarization] Found SpeechBrain model at: %s", savedir)
                 break
+        else:
+            logging.debug("[Diarization][SpeechBrain] Candidate does not exist: %s", candidate)
 
     # If no existing model found, use default location and let SpeechBrain download
     required_files = [
         "hyperparams.yaml",
         "embedding_model.ckpt",
         "classifier.ckpt",
-        "label_encoder.ckpt",
         "mean_var_norm_emb.ckpt",
         "label_encoder.txt",
+        "label_encoder.ckpt",
         "custom.py",
     ]
+
+    logging.info(
+        "[Diarization][SpeechBrain] Required files list prepared: %s",
+        ", ".join(required_files),
+    )
 
     if savedir is None:
         savedir = os.path.join(models_root(), "speechbrain_ecapa")
@@ -584,7 +634,12 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
         model_exists = False
     else:
         # Check if model files actually exist
-        missing = [f for f in required_files if not os.path.exists(os.path.join(savedir, f))]
+        file_status = {f: os.path.exists(os.path.join(savedir, f)) for f in required_files}
+        missing = [name for name, present in file_status.items() if not present]
+        logging.info(
+            "[Diarization][SpeechBrain] File presence snapshot: %s",
+            ", ".join(f"{name}={'present' if present else 'missing'}" for name, present in file_status.items()),
+        )
         model_exists = not missing
         if model_exists:
             logging.info("[Diarization] Model files verified in: %s", savedir)
@@ -598,18 +653,31 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
     try:
         if model_exists:
             # Load from local files only (offline mode)
-            logging.info("[Diarization] Loading SpeechBrain model from local files (offline)")
+            logging.info(
+                "[Diarization] Loading SpeechBrain model from local files (offline) | savedir=%s | files_ok=%s",
+                savedir,
+                model_exists,
+            )
             classifier = EncoderClassifier.from_hparams(
                 source=savedir,  # Use local path as source for offline loading
                 savedir=savedir
             )
         else:
             # Download from HuggingFace Hub
-            logging.info("[Diarization] Downloading SpeechBrain model from HuggingFace Hub")
+            logging.info(
+                "[Diarization] Downloading SpeechBrain model from HuggingFace Hub | savedir=%s",
+                savedir,
+            )
             classifier = EncoderClassifier.from_hparams(
                 source="speechbrain/spkrec-ecapa-voxceleb",
                 savedir=savedir
             )
+        device_attr = getattr(classifier, "device", None)
+        logging.info(
+            "[Diarization][SpeechBrain] EncoderClassifier ready | device=%s | savedir=%s",
+            device_attr,
+            savedir,
+        )
     except Exception as e:
         logging.error("[Diarization] Failed to load SpeechBrain model from %s: %s", savedir, e)
         _log_speechbrain_savedir_state(savedir, required_files, "Load failure diagnostics")
@@ -620,6 +688,10 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
         raise
 
     embeddings = []
+    logging.info(
+        "[Diarization][SpeechBrain] Beginning segment embedding loop | total_segments=%s",
+        len(voiced_segments),
+    )
     for idx, (start, end) in enumerate(voiced_segments):
         try:
             s = max(0, int(start * sr))
@@ -630,9 +702,23 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
             if len(segment) < 100 or np.abs(segment).max() < 1e-6:
                 # Use a small random embedding for silent segments
                 emb_np = np.random.randn(192).astype(np.float32) * 0.01
+                logging.debug(
+                    "[Diarization][SpeechBrain] Segment %d (%.2f-%.2f) considered silent | samples=%d",
+                    idx,
+                    start,
+                    end,
+                    len(segment),
+                )
             else:
                 # SpeechBrain expects torch tensor
                 waveform = torch.from_numpy(segment).unsqueeze(0)  # (1, samples)
+                logging.debug(
+                    "[Diarization][SpeechBrain] Encoding segment %d (%.2f-%.2f) | samples=%d",
+                    idx,
+                    start,
+                    end,
+                    len(segment),
+                )
 
                 with torch.no_grad():
                     emb = classifier.encode_batch(waveform)
@@ -649,7 +735,13 @@ def _extract_embeddings_speechbrain(audio, sr: int, voiced_segments: List[Tuple[
     if not embeddings:
         raise RuntimeError("No embeddings extracted from any voiced segment")
 
-    return np.stack(embeddings, axis=0)
+    emb_stack = np.stack(embeddings, axis=0)
+    logging.info(
+        "[Diarization][SpeechBrain] Completed embeddings | shape=%s | dtype=%s",
+        emb_stack.shape,
+        emb_stack.dtype,
+    )
+    return emb_stack
 
 
 def _extract_embeddings_wespeaker(audio, sr: int, voiced_segments: List[Tuple[float, float]]):
