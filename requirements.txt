@@ -39,3 +39,5 @@ pynvml>=11.0.0
 # Build (Windows)
 pyinstaller>=6.0
 pyinstaller-hooks-contrib>=2024.0
+# Needed because setuptools vendor jaraco.context expects backports.tarfile on Py<3.12 (Windows build runtime)
+backports.tarfile>=1.0

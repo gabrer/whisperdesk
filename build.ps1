@@ -56,6 +56,7 @@ $collectArgs = @(
   '--collect-all', 'certifi',
   '--collect-all', 'requests',
   '--collect-all', 'urllib3'
+  '--hidden-import', 'backports.tarfile'
 )
 
 # SpeechBrain and PyTorch (enabled by default for best diarization)
